@@ -19,7 +19,7 @@ struct MenubarView: View {
     }
 
     private var emptyState: some View {
-        Text("No vaults configured")
+        Text("No folders added")
             .foregroundStyle(.secondary)
             .padding()
     }
@@ -86,7 +86,7 @@ struct MenubarView: View {
 
     private var actionButtons: some View {
         HStack {
-            Button("Add Vault") {
+            Button("Add Folder") {
                 appState.showAddVault = true
                 NSApplication.shared.activate(ignoringOtherApps: true)
             }

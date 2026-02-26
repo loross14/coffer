@@ -15,7 +15,7 @@ struct AddVaultView: View {
 
     var body: some View {
         VStack(spacing: 20) {
-            Text("Add New Vault")
+            Text("Add Folder")
                 .font(.title2)
                 .fontWeight(.semibold)
 
@@ -62,7 +62,7 @@ struct AddVaultView: View {
 
                 Spacer()
 
-                Button(isCreating ? "Creating..." : "Create Coffer") {
+                Button(isCreating ? "Locking..." : "Lock Folder") {
                     createVault()
                 }
                 .buttonStyle(.borderedProminent)
@@ -101,7 +101,7 @@ struct AddVaultView: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.message = "Add a file or folder to the Coffer"
+        panel.message = "Choose a file or folder to lock"
         if panel.runModal() == .OK, let url = panel.url {
             folderPath = url.path
             if name.isEmpty {

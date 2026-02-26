@@ -9,11 +9,11 @@ struct VaultListView: View {
         NavigationStack {
             if appState.vaults.isEmpty {
                 ContentUnavailableView {
-                    Label("No Vaults", systemImage: "lock.shield")
+                    Label("No Folders", systemImage: "lock.shield")
                 } description: {
                     Text("Add a folder to protect it with Touch ID and AES-256 encryption.")
                 } actions: {
-                    Button("Add Vault") {
+                    Button("Add Folder") {
                         appState.showAddVault = true
                     }
                     .buttonStyle(.borderedProminent)
@@ -37,7 +37,7 @@ struct VaultListView: View {
                 Button {
                     appState.showAddVault = true
                 } label: {
-                    Label("Add Vault", systemImage: "plus")
+                    Label("Add Folder", systemImage: "plus")
                 }
             }
         }

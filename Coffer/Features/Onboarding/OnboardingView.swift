@@ -15,7 +15,7 @@ struct OnboardingView: View {
                     .font(.title)
                     .fontWeight(.bold)
 
-                Text("Encrypt folders with Touch ID and a password.")
+                Text("Lock folders with Touch ID and a password.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -27,7 +27,7 @@ struct OnboardingView: View {
                 FeatureRow(
                     icon: "faceid",
                     title: "Touch ID Protection",
-                    description: "Unlock your vaults with a fingerprint."
+                    description: "Unlock your folders with a fingerprint."
                 )
 
                 FeatureRow(

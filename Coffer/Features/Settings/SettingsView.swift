@@ -12,8 +12,8 @@ struct SettingsView: View {
         TabView {
             Form {
                 Section("Auto-Lock") {
-                    Toggle("Lock vaults on sleep", isOn: $autoLockOnSleep)
-                    Toggle("Lock vaults on screen lock", isOn: $autoLockOnScreenLock)
+                    Toggle("Lock folders on sleep", isOn: $autoLockOnSleep)
+                    Toggle("Lock folders on screen lock", isOn: $autoLockOnScreenLock)
                     Stepper("Default auto-lock: \(defaultAutoLockMinutes) min", value: $defaultAutoLockMinutes, in: 0...60)
                 }
 

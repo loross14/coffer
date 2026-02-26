@@ -30,7 +30,7 @@ public enum CofferError: LocalizedError {
         case .keychainDeleteFailed(let status):
             return "Failed to delete from Keychain (status: \(status))."
         case .vaultNotFound:
-            return "Vault not found."
+            return "Folder not found."
         case .manifestCorrupted:
             return "Encryption manifest is corrupted. Manual recovery may be needed."
         case .encryptedFileMissing(let path):

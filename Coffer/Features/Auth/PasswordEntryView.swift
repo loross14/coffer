@@ -20,7 +20,7 @@ struct PasswordEntryView: View {
                 .fontWeight(.semibold)
 
             if isLocking {
-                Text("Enter your password to encrypt all files.")
+                Text("Enter your password to lock all files.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
