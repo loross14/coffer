@@ -47,3 +47,12 @@ Validation:
 - Independent source review found one settings-subtree mismatch; the final scope now preserves `.obsidian` descendants unless explicitly excluded, with a regression fixture. The final package was rebuilt and reopened. Existing Mythology-Graph format-1 history remained readable.
 - Final app on `planisphere-build`: pruning scanned 973 Markdown notes successfully. Checkpoint review completed in about two seconds and showed 15,409 files, 935 folders, 13 links, 4.01 GB and 207 excluded locations. These are observed estimates; capture validates the selected contents again. The reviewed scope was left for the user to accept before saving a live checkpoint.
 - Final local ZIP SHA-256: `2706c419b5e50c7d8c2dcf49d5529eb12497da53de415772c135fa49743f54f3`. Packaging verified the ad-hoc signature. The app remains a local candidate, not a notarized public release.
+
+## 0.3.1 — Markdown as the default
+
+Logan then requested Markdown-only capture. Create Checkpoint now defaults to Markdown Only, with Vault Content and Whole Folder available as explicit alternatives. Scope version 2 preserves this meaning without reinterpreting existing scope-version-1 checkpoints. The mode includes regular lowercase `.md` files and required ancestors; settings, attachments, symbolic links and other files are excluded. Signed pruning recovery still uses Whole Folder.
+
+- All 38 XCTest cases and 13 managed tests passed. Four new cases cover Markdown-only capture/restore/export, omitted settings still pinning scope, ignored binary edits, special/link non-reading, forged manifest rejection, and exact legacy-scope serialization.
+- Packaged 0.3.1 reopened with the existing Mythology-Graph checkpoint readable. The build vault's native review defaulted to 974 Markdown notes, 354 folders, zero symbolic links and 6.6 MB. Saving completed successfully as checkpoint `41355F6A-6391-4798-B5E7-55B718678F87` on vault `352E1853-3EB0-4A58-8F02-0AFC94E21405`. The earlier 4 GB proposal was not saved.
+- The saved manifest was independently checked for scope version 2, only `.md` regular files and required parent directories; every stored file object's bytes and SHA-256 were verified. No source note or attachment was changed by capture.
+- Local ZIP SHA-256: `1b1c99fc01ec7a80ac2d79519abee618ff0b4f2cd2f5b24a7617d2461001b749`; ad-hoc signature verification passed. Public-distribution limits remain unchanged.

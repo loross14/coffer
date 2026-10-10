@@ -348,7 +348,7 @@ public actor VaultStore {
         var totalBytes: Int64 = 0
         for entry in checkpoint.entries {
             try VaultFS.relative(entry.path)
-            guard checkpoint.captureScope?.excludes(entry.path, isDirectory: entry.kind == .directory) != true else {
+            guard checkpoint.captureScope?.excludes(entry.path, isDirectory: entry.kind == .directory, isSymbolicLink: entry.kind == .symbolicLink, isRegularFile: entry.kind == .file) != true else {
                 throw VaultStoreError.corrupt("checkpoint includes a path excluded by its recorded scope")
             }
             guard paths[entry.path] == nil, portablePaths.insert(VaultFS.portablePathKey(entry.path)).inserted,
@@ -370,14 +370,22 @@ public actor VaultStore {
             }
             paths[entry.path] = entry
         }
+        var requiredDirectories: Set<String> = []
         for path in paths.keys {
             let parts = path.split(separator: "/")
             if parts.count > 1 {
                 for index in 1..<parts.count {
-                    guard paths[parts.prefix(index).joined(separator: "/")]?.kind == .directory else {
+                    let parent = parts.prefix(index).joined(separator: "/")
+                    guard paths[parent]?.kind == .directory else {
                         throw VaultStoreError.corrupt("missing or non-directory parent")
                     }
+                    if paths[path]?.kind == .file { requiredDirectories.insert(parent) }
                 }
+            }
+        }
+        if checkpoint.captureScope?.mode == .markdownOnly {
+            guard checkpoint.entries.allSatisfy({ $0.kind != .directory || requiredDirectories.contains($0.path) }) else {
+                throw VaultStoreError.corrupt("Markdown Only checkpoint contains an unrelated directory")
             }
         }
     }
@@ -471,15 +479,21 @@ public actor VaultStore {
                 let path = prefix.isEmpty ? name : prefix + "/" + name
                 try VaultFS.relative(path)
                 guard let info = try VaultFS.entryInfo(directory, name) else { throw VaultStoreError.changedDuringCapture }
-                if scope?.excludes(path, isDirectory: (info.st_mode & S_IFMT) == S_IFDIR) == true { continue }
+                let kind = info.st_mode & S_IFMT
+                if scope?.excludes(path, isDirectory: kind == S_IFDIR, isSymbolicLink: kind == S_IFLNK, isRegularFile: kind == S_IFREG) == true { continue }
                 switch info.st_mode & S_IFMT {
                 case S_IFDIR:
                     let child = try VaultFS.childDirectory(directory, name)
                     guard VaultFS.Stamp(info) == VaultFS.Stamp(try VaultFS.info(child)) else { throw VaultStoreError.changedDuringCapture }
-                    entries.append(FileEntry(path: path, kind: .directory))
+                    let previousCount = entries.count
+                    if scope?.mode != .markdownOnly { entries.append(FileEntry(path: path, kind: .directory)) }
                     try walk(child, prefix: path)
+                    if scope?.mode == .markdownOnly {
+                        if entries.count > previousCount { entries.append(FileEntry(path: path, kind: .directory)) }
+                        else { stamps.removeValue(forKey: path) }
+                    }
                 case S_IFREG:
-                    let file = try VaultFS.Handle(openat(directory.fd, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC))
+                    let file = try VaultFS.Handle(openat(directory.fd, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC))
                     guard VaultFS.Stamp(info) == VaultFS.Stamp(try VaultFS.info(file)) else { throw VaultStoreError.changedDuringCapture }
                     let temporary = ".incoming-" + UUID().uuidString
                     var output: VaultFS.Handle?

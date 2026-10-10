@@ -319,7 +319,7 @@ struct VaultWorkspaceView: View {
                                     .font(.caption2).foregroundStyle(.secondary)
                                 Text("\(model.checkpointContentSummary(checkpoint)) · \(bytes(checkpoint.totalBytes))")
                                     .font(.caption2).foregroundStyle(.secondary)
-                                Text(checkpoint.captureScope == nil ? "Whole Folder" : "Vault Content · exclusions applied")
+                                Text(model.checkpointModeTitle(checkpoint.captureScope?.mode ?? .wholeFolder))
                                     .font(.caption2).foregroundStyle(.secondary)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -415,8 +415,10 @@ struct VaultWorkspaceView: View {
 
     private func savedScope(_ scope: CheckpointScope) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Saved Vault Content scope").font(.headline)
-            Text("This checkpoint excludes hidden folders other than the root .obsidian folder, node_modules, __pycache__, and the literal paths below. Explicit paths can also exclude Obsidian settings. Excluded content is absent from recovered copies.")
+            Text("Saved \(model.checkpointModeTitle(scope.mode)) scope").font(.headline)
+            Text(scope.mode == .markdownOnly
+                 ? "This checkpoint contains regular .md notes only. Attachments, settings, symbolic links, hidden folders including .obsidian, dependency folders, and the literal paths below are excluded. Excluded content is absent from recovered copies."
+                 : "This checkpoint excludes hidden folders outside .obsidian settings, node_modules, __pycache__, and the literal paths below. Explicit paths can also exclude Obsidian settings. Excluded content is absent from recovered copies.")
                 .font(.callout).foregroundStyle(.secondary)
             Text("\(scope.excludedPaths.count) saved path rules").font(.caption.weight(.semibold))
             ScrollView {

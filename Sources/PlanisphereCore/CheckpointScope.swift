@@ -2,27 +2,31 @@ import Foundation
 import Darwin
 
 public enum CheckpointMode: String, CaseIterable, Sendable {
-    case vaultContent, wholeFolder
+    case markdownOnly, vaultContent, wholeFolder
 }
 
-/// Frozen, inspectable rules for an explicitly reviewed vault-content checkpoint.
+/// Frozen, inspectable rules for an explicitly reviewed checkpoint.
 /// Nil scope on a checkpoint continues to mean the complete folder.
 public struct CheckpointScope: Codable, Equatable, Sendable {
     public let version: Int
     public let excludedPaths: [String]
     public let sourceConfigurationSHA256: String?
 
-    internal init(excludedPaths: [String], sourceConfigurationSHA256: String?) {
-        version = 1
+    // Version 1 retains its original encoded shape and Vault Content behavior.
+    // A computed mode does not alter the checksums of existing manifests.
+    public var mode: CheckpointMode { version == 2 ? .markdownOnly : .vaultContent }
+
+    internal init(excludedPaths: [String], sourceConfigurationSHA256: String?, mode: CheckpointMode = .vaultContent) {
+        version = mode == .markdownOnly ? 2 : 1
         self.excludedPaths = excludedPaths
         self.sourceConfigurationSHA256 = sourceConfigurationSHA256
     }
 
-    public func excludes(_ relativePath: String, isDirectory: Bool) -> Bool {
-        exclusionReason(relativePath, isDirectory: isDirectory) != nil
+    public func excludes(_ relativePath: String, isDirectory: Bool, isSymbolicLink: Bool = false, isRegularFile: Bool = true) -> Bool {
+        exclusionReason(relativePath, isDirectory: isDirectory, isSymbolicLink: isSymbolicLink, isRegularFile: isRegularFile) != nil
     }
 
-    internal func exclusionReason(_ path: String, isDirectory: Bool) -> String? {
+    internal func exclusionReason(_ path: String, isDirectory: Bool, isSymbolicLink: Bool = false, isRegularFile: Bool = true) -> String? {
         for rule in excludedPaths {
             let target = rule.hasSuffix("/") ? String(rule.dropLast()) : rule
             // Match the path itself without probing whether a link points to a folder.
@@ -33,19 +37,24 @@ public struct CheckpointScope: Codable, Equatable, Sendable {
         }
         // Settings are part of the vault, including plugins' hidden state. Only
         // explicit user filters may omit entries inside this configuration tree.
-        if path == ".obsidian" || path.hasPrefix(".obsidian/") { return nil }
+        if mode == .vaultContent && (path == ".obsidian" || path.hasPrefix(".obsidian/")) { return nil }
         let name = path.split(separator: "/").last.map(String.init) ?? path
         if isDirectory && name.hasPrefix(".") {
-            return "Hidden folder outside Obsidian settings"
+            return mode == .markdownOnly ? "Hidden folder" : "Hidden folder outside Obsidian settings"
         }
         if isDirectory && ["node_modules", "__pycache__"].contains(name) {
             return "Generated dependency folder"
+        }
+        if mode == .markdownOnly && !isDirectory {
+            if isSymbolicLink { return "Symbolic link; Markdown Only saves regular files" }
+            if !isRegularFile { return "Special file; Markdown Only saves regular files" }
+            if !name.hasSuffix(".md") { return "Not a lowercase .md file" }
         }
         return nil
     }
 
     internal func validate() throws {
-        guard version == 1, excludedPaths.count <= 4096,
+        guard [1, 2].contains(version), excludedPaths.count <= 4096,
               excludedPaths == Array(Set(excludedPaths)).sorted(),
               excludedPaths.allSatisfy(Self.isLiteralPath) else {
             throw VaultStoreError.corrupt("invalid checkpoint content scope")
@@ -58,7 +67,7 @@ public struct CheckpointScope: Codable, Equatable, Sendable {
     }
 
     internal func verifySource(_ source: VaultFS.Handle) throws {
-        guard try Self.load(source).scope == self else {
+        guard try Self.load(source, mode: mode).scope == self else {
             throw VaultStoreError.invalid("Obsidian exclusions changed after review. Review the checkpoint again before saving.")
         }
     }
@@ -72,7 +81,7 @@ public struct CheckpointScope: Codable, Equatable, Sendable {
             .allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
     }
 
-    internal static func load(_ source: VaultFS.Handle) throws -> (scope: CheckpointScope, unsupported: [String]) {
+    internal static func load(_ source: VaultFS.Handle, mode: CheckpointMode = .vaultContent) throws -> (scope: CheckpointScope, unsupported: [String]) {
         let data: Data?
         if let folderInfo = try VaultFS.entryInfo(source, ".obsidian") {
             guard folderInfo.st_mode & S_IFMT == S_IFDIR else {
@@ -101,7 +110,7 @@ public struct CheckpointScope: Codable, Equatable, Sendable {
                 }
             }
         }
-        let scope = CheckpointScope(excludedPaths: Array(Set(includedRules)).sorted(), sourceConfigurationSHA256: data.map(VaultFS.hash))
+        let scope = CheckpointScope(excludedPaths: Array(Set(includedRules)).sorted(), sourceConfigurationSHA256: data.map(VaultFS.hash), mode: mode)
         try scope.validate()
         return (scope, unsupported)
     }
@@ -149,7 +158,7 @@ public struct CheckpointPlan: Sendable {
 internal enum CheckpointScopePlanner {
     /// Metadata-only review; actual capture still reads and validates every included byte twice.
     static func plan(source: VaultFS.Handle, mode: CheckpointMode) throws -> CheckpointPlan {
-        let configuration = mode == .vaultContent ? try CheckpointScope.load(source) : nil
+        let configuration = mode != .wholeFolder ? try CheckpointScope.load(source, mode: mode) : nil
         let scope = configuration?.scope
         var files = 0, directories = 0, links = 0, excluded = 0
         var bytes: Int64 = 0
@@ -160,19 +169,27 @@ internal enum CheckpointScopePlanner {
                 let path = prefix.isEmpty ? name : prefix + "/" + name
                 try VaultFS.relative(path)
                 guard let info = try VaultFS.entryInfo(directory, name) else { throw VaultStoreError.changedDuringCapture }
-                let isDirectory = info.st_mode & S_IFMT == S_IFDIR
-                if let reason = scope?.exclusionReason(path, isDirectory: isDirectory) {
+                let kind = info.st_mode & S_IFMT
+                if let reason = scope?.exclusionReason(path, isDirectory: kind == S_IFDIR, isSymbolicLink: kind == S_IFLNK, isRegularFile: kind == S_IFREG) {
                     excluded += 1
                     if exclusions.count < 200 { exclusions.append(CheckpointExclusion(path: path, reason: reason)) }
                     continue
                 }
                 switch info.st_mode & S_IFMT {
                 case S_IFDIR:
-                    directories += 1
+                    if mode != .markdownOnly { directories += 1 }
                     guard files + directories + links <= 250_000 else { throw VaultStoreError.invalid("This folder exceeds the 250,000-entry checkpoint limit. Review Vault Content to leave excluded development folders out.") }
                     let child = try VaultFS.childDirectory(directory, name)
                     guard VaultFS.Stamp(info) == VaultFS.Stamp(try VaultFS.info(child)) else { throw VaultStoreError.changedDuringCapture }
+                    let previousFiles = files
                     try walk(child, prefix: path)
+                    if mode == .markdownOnly {
+                        if files > previousFiles { directories += 1 }
+                        else {
+                            excluded += 1
+                            if exclusions.count < 200 { exclusions.append(CheckpointExclusion(path: path, reason: "Folder contains no included Markdown files")) }
+                        }
+                    }
                 case S_IFREG, S_IFLNK:
                     if info.st_mode & S_IFMT == S_IFLNK { links += 1 } else { files += 1 }
                     let (sum, overflow) = bytes.addingReportingOverflow(info.st_size)

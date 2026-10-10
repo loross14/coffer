@@ -30,7 +30,7 @@ final class VaultAppModel {
     var afterText: String?
     var checkpointMessage = ""
     var checkpointReviewPresented = false
-    var checkpointMode: CheckpointMode = .vaultContent
+    var checkpointMode: CheckpointMode = .markdownOnly
     var checkpointPlan: CheckpointPlan?
     var checkpointPlanError: String?
     private var checkpointReviewVaultID: UUID?
@@ -172,7 +172,7 @@ final class VaultAppModel {
         guard !isBusy, historyReadError == nil, let vault = selectedVault else { return }
         checkpointReviewVaultID = vault.id
         checkpointReviewPresented = true
-        reviewCheckpointMode(.vaultContent)
+        reviewCheckpointMode(.markdownOnly)
     }
 
     func reviewCheckpointMode(_ mode: CheckpointMode) {
@@ -221,7 +221,12 @@ final class VaultAppModel {
                 self.checkpointPlan = nil
                 self.checkpointReviewVaultID = nil
                 self.checkpointMessage = ""
-                let scopeNotice = plan.mode == .vaultContent ? " Vault Content exclusions were applied; excluded content was not saved." : ""
+                let scopeNotice: String
+                switch plan.mode {
+                case .markdownOnly: scopeNotice = " Markdown Only: attachments, settings, symbolic links, and excluded content were not saved."
+                case .vaultContent: scopeNotice = " Vault Content exclusions were applied; excluded content was not saved."
+                case .wholeFolder: scopeNotice = ""
+                }
                 let completion = "Checkpoint saved on this Mac at \(checkpoint.createdAt.formatted(date: .omitted, time: .standard)). \(self.checkpointContentSummary(checkpoint)) preserved.\(scopeNotice)"
                 await self.refreshAfterCompletion(completion) {
                     try await self.reloadHistory(store: store, preferred: checkpoint.id)
@@ -233,7 +238,7 @@ final class VaultAppModel {
     func restoreCopy() {
         guard !isBusy, let vault = selectedVault, let checkpoint = selectedCheckpoint,
               let url = newFolderDestination(title: "Restore a New Copy", prompt: "Restore Copy", name: "\(vault.name) — Recovered",
-                  message: "Restore this checkpoint into a new folder. Your original vault and its newer work remain untouched. The recovered copy will be added as a separate vault." + (checkpoint.captureScope != nil ? " This is a Vault Content checkpoint: excluded content was not saved and will not appear in the recovered copy." : "") + (checkpoint.symbolicLinkCount > 0 ? " Symbolic links are recreated with their saved targets; they can refer outside the recovered folder. Referenced contents are not copied through those links." : "")) else { return }
+                  message: "Restore this checkpoint into a new folder. Your original vault and its newer work remain untouched. The recovered copy will be added as a separate vault." + checkpointScopeWarning(checkpoint) + (checkpoint.symbolicLinkCount > 0 ? " Symbolic links are recreated with their saved targets; they can refer outside the recovered folder. Referenced contents are not copied through those links." : "")) else { return }
         Task {
             await perform("Verifying and restoring a new copy") { store in
                 let recovered = try await store.restoreCopy(vaultID: vault.id, checkpointID: checkpoint.id, destination: url)
@@ -247,9 +252,9 @@ final class VaultAppModel {
     func exportVault() {
         guard !isBusy, historyReadError == nil, !checkpoints.isEmpty, let vault = selectedVault,
               let url = newFolderDestination(title: "Export Vault and History", prompt: "Export", name: "\(vault.name) — Export",
-                  message: "Export the latest saved checkpoint and all retained history into a new folder. Changes since the last checkpoint are not included. The working vault stays in place." + (checkpoints.first?.captureScope != nil ? " The latest checkpoint contains Vault Content only; excluded content was not saved and will not appear in its exported copy." : "") + ((checkpoints.first?.symbolicLinkCount ?? 0) > 0 ? " Symbolic links are exported as references, including targets outside the folder; referenced contents are not copied through them." : "")) else { return }
+                  message: "Export the latest saved checkpoint and all retained history into a new folder. Changes since the last checkpoint are not included. The working vault stays in place." + (checkpoints.first.map(checkpointScopeWarning) ?? "") + ((checkpoints.first?.symbolicLinkCount ?? 0) > 0 ? " Symbolic links are exported as references, including targets outside the folder; referenced contents are not copied through them." : "")) else { return }
         Task {
-            await perform("Preparing a complete export") { store in
+            await perform("Exporting saved checkpoint and history") { store in
                 let exported = try await store.exportVault(vaultID: vault.id, destination: url)
                 self.showNotice("The latest saved checkpoint and retained history were exported. Changes since the last checkpoint are not included.", url: exported)
             }
@@ -288,8 +293,27 @@ final class VaultAppModel {
     func reveal(_ url: URL) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
 
     func checkpointContentSummary(_ checkpoint: Checkpoint) -> String {
-        let files = "\(checkpoint.fileCount) files"
+        let files = "\(checkpoint.fileCount) " + (checkpoint.captureScope?.mode == .markdownOnly ? "Markdown notes" : "files")
         return checkpoint.symbolicLinkCount == 0 ? files : "\(files) · \(checkpoint.symbolicLinkCount) symbolic links"
+    }
+
+    func checkpointModeTitle(_ mode: CheckpointMode) -> String {
+        switch mode {
+        case .markdownOnly: "Markdown Only"
+        case .vaultContent: "Vault Content"
+        case .wholeFolder: "Whole Folder"
+        }
+    }
+
+    private func checkpointScopeWarning(_ checkpoint: Checkpoint) -> String {
+        switch checkpoint.captureScope?.mode ?? .wholeFolder {
+        case .markdownOnly:
+            " This is a Markdown Only checkpoint. Its copy contains saved notes, without attachments, settings, symbolic links, or excluded content."
+        case .vaultContent:
+            " This is a Vault Content checkpoint. Excluded content was not saved and will not appear in its copy."
+        case .wholeFolder:
+            ""
+        }
     }
 
     // MARK: - Grapheine pruning

@@ -12,14 +12,13 @@ struct CheckpointReviewView: View {
                 Picker("Checkpoint contents", selection: Binding(
                     get: { model.checkpointMode }, set: { model.reviewCheckpointMode($0) }
                 )) {
+                    Text("Markdown Only").tag(CheckpointMode.markdownOnly)
                     Text("Vault Content").tag(CheckpointMode.vaultContent)
                     Text("Whole Folder").tag(CheckpointMode.wholeFolder)
                 }
                 .pickerStyle(.segmented).disabled(model.isBusy)
                 .accessibilityIdentifier("checkpoint-scope")
-                Text(model.checkpointMode == .vaultContent
-                     ? "Keep vault content and .obsidian settings unless explicitly excluded. Skip supported Obsidian exclusions, other hidden directories, and common dependency folders. Review the exclusions before saving."
-                     : "Include the whole folder without Vault Content exclusions. Symbolic links are saved as links; their targets are not followed. Large folders may exceed the checkpoint limit.")
+                Text(modeDescription)
                     .font(.callout).foregroundStyle(.secondary).lineSpacing(3)
             }
             .padding(24)
@@ -70,7 +69,7 @@ struct CheckpointReviewView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Expected contents").font(.headline)
             HStack(alignment: .top, spacing: 26) {
-                metric("Files", "\(plan.fileCount)")
+                metric(plan.mode == .markdownOnly ? "Markdown notes" : "Files", "\(plan.fileCount)")
                 metric("Folders", "\(plan.directoryCount)")
                 metric("Symbolic links", "\(plan.symbolicLinkCount)")
                 metric("Stored size", ByteCountFormatter.string(fromByteCount: plan.totalBytes, countStyle: .file))
@@ -95,7 +94,7 @@ struct CheckpointReviewView: View {
             }
             Divider()
             Text("\(plan.excludedPathCount) excluded locations").font(.headline)
-            if plan.mode == .vaultContent {
+            if plan.mode != .wholeFolder {
                 Text("Excluded content will not be in this checkpoint or its recovered copy. The scope is retained with the checkpoint. A listed folder represents its contents; the count is not a count of every omitted file.")
                     .font(.callout).foregroundStyle(.secondary).lineSpacing(3)
             }
@@ -115,6 +114,17 @@ struct CheckpointReviewView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
+        }
+    }
+
+    private var modeDescription: String {
+        switch model.checkpointMode {
+        case .markdownOnly:
+            "Save regular .md notes using supported Obsidian exclusions. Skip attachments, settings, symbolic links, hidden folders including .obsidian, and common dependency folders."
+        case .vaultContent:
+            "Keep vault content and .obsidian settings unless explicitly excluded. Skip supported Obsidian exclusions, other hidden directories, and common dependency folders. Review the exclusions before saving."
+        case .wholeFolder:
+            "Include the whole folder without content exclusions. Symbolic links are saved as links; their targets are not followed. Large folders may exceed the checkpoint limit."
         }
     }
 

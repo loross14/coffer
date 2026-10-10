@@ -59,7 +59,7 @@ final class CheckpointScopeTests: XCTestCase {
     func testManifestScopeValidationRejectsTraversalAndUnknownRulesVersion() throws {
         let traversal = CheckpointScope(excludedPaths: ["../outside/"], sourceConfigurationSHA256: nil)
         XCTAssertThrowsError(try traversal.validate())
-        let unknown = try JSONDecoder().decode(CheckpointScope.self, from: Data(#"{"version":2,"excludedPaths":[]}"#.utf8))
+        let unknown = try JSONDecoder().decode(CheckpointScope.self, from: Data(#"{"version":3,"excludedPaths":[]}"#.utf8))
         XCTAssertThrowsError(try unknown.validate())
     }
 }
