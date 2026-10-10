@@ -32,6 +32,9 @@ struct VaultWorkspaceView: View {
             CheckpointReviewView(model: model)
                 .interactiveDismissDisabled(model.isBusy)
         }
+        .sheet(isPresented: Binding(get: { model.console.presented }, set: { model.console.presented = $0 })) {
+            ConsoleConnectionView(connection: model.console)
+        }
         .sheet(isPresented: $model.localRecoveryReviewPresented) {
             LocalPruningRecoveryView(model: model)
                 .interactiveDismissDisabled(model.isBusy)
@@ -195,6 +198,13 @@ struct VaultWorkspaceView: View {
                     }
                 }.padding(.horizontal, 10)
             }.frame(minHeight: 0, maxHeight: .infinity)
+
+            Button { model.console.presented = true } label: {
+                Label(model.console.title, systemImage: "network")
+                    .font(.system(size: 12, weight: .medium)).lineLimit(1)
+                    .padding(.horizontal, 18).padding(.top, 12)
+            }.buttonStyle(.plain).disabled(!model.canNavigateWorkspace)
+            .accessibilityIdentifier("console-connection")
 
             Button { showLocalInfo = true } label: {
                 HStack(spacing: 8) {

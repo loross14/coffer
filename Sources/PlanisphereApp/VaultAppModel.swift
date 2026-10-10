@@ -20,6 +20,7 @@ private struct PruningAttempt: Codable {
 @MainActor
 @Observable
 final class VaultAppModel {
+    let console = ConsoleConnectionModel()
     var sidebarVisible = true
     var commandPalettePresented = false
     var workspaceConfirmationPresented = false
