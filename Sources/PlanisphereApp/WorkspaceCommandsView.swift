@@ -30,10 +30,7 @@ struct WorkspaceCommandsView: View {
             }
             result.append(Command(id: "finder", title: "Open vault in Finder", detail: model.selectedVault?.name ?? "",
                 symbol: "folder", shortcut: "", action: { model.openSelectedVault() }))
-            if model.canOpenObsidian {
-                result.append(Command(id: "obsidian", title: "Open vault in Obsidian", detail: "Continue in your editor",
-                    symbol: "arrow.up.forward.app", shortcut: "", action: { model.openInObsidian() }))
-            }
+
         }
         for vault in model.vaults {
             result.append(Command(id: vault.id.uuidString, title: vault.name, detail: vault.path,

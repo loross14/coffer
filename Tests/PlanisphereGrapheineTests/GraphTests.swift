@@ -7,7 +7,7 @@ final class GraphTests: XCTestCase, @unchecked Sendable {
     func testRealBridgeGraphReadsOnlySelectedMarkdownScopeAndReturnsNoBodies() async throws {
         let fixture = try temporary()
         defer { try? FileManager.default.removeItem(at: fixture) }
-        for folder in ["Notes", "Other", "Ignored", ".obsidian"] {
+        for folder in ["Notes", "Other", "Ignored", ".planisphere"] {
             try FileManager.default.createDirectory(at: fixture.appendingPathComponent(folder), withIntermediateDirectories: true)
         }
         let body = "[[Notes/Target]] [[Target]] [[Missing]] [relative](Notes/Target.md) `[[Other/Target]]`\n"
@@ -15,7 +15,7 @@ final class GraphTests: XCTestCase, @unchecked Sendable {
         try Data("# PRIVATE NOTE BODY\n".utf8).write(to: fixture.appendingPathComponent("Notes/Target.md"))
         try Data().write(to: fixture.appendingPathComponent("Other/Target.md"))
         try Data("[[Read]]".utf8).write(to: fixture.appendingPathComponent("Ignored/Hidden.md"))
-        try Data(#"{"userIgnoreFilters":["Ignored/"]}"#.utf8).write(to: fixture.appendingPathComponent(".obsidian/app.json"))
+        try Data(#"{"excludedPaths":["Ignored/"]}"#.utf8).write(to: fixture.appendingPathComponent(".planisphere/scope.json"))
         try FileManager.default.createSymbolicLink(at: fixture.appendingPathComponent("linked.md"), withDestinationURL: fixture.appendingPathComponent("Read.md"))
 
         let graph = try await GrapheineService().graph(vaultURL: fixture)

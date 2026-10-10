@@ -107,7 +107,7 @@ struct CheckpointReviewView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             if !plan.unsupportedFilters.isEmpty {
-                Label("Some Obsidian exclusions were not applied", systemImage: "exclamationmark.circle")
+                Label("Some Planisphere exclusions were not applied", systemImage: "exclamationmark.circle")
                     .font(.callout.weight(.semibold)).foregroundStyle(.orange)
                 Text("Only supported literal exclusions are applied. Content matched only by these unsupported rules may be included.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -167,9 +167,9 @@ struct CheckpointReviewView: View {
     private var modeDescription: String {
         switch model.checkpointMode {
         case .markdownOnly:
-            "Save regular .md notes using supported Obsidian exclusions. Skip attachments, settings, symbolic links, hidden folders including .obsidian, and common dependency folders."
+            "Save regular .md notes using supported Planisphere exclusions. Skip attachments, settings, symbolic links, hidden folders including .planisphere, and common dependency folders."
         case .vaultContent:
-            "Keep vault content and .obsidian settings unless explicitly excluded. Skip supported Obsidian exclusions, other hidden directories, and common dependency folders. Review the exclusions before saving."
+            "Keep vault content and .planisphere settings unless explicitly excluded. Skip supported Planisphere exclusions, other hidden directories, and common dependency folders. Review the exclusions before saving."
         case .wholeFolder:
             "Include the whole folder without content exclusions. Symbolic links are saved as links; their targets are not followed. Large folders may exceed the checkpoint limit."
         }

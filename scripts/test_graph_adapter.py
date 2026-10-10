@@ -106,12 +106,12 @@ class GraphAdapterTests(unittest.TestCase):
     def test_bridge_scope_skips_hidden_dependencies_and_symlinks_without_authority_or_writes(self):
         with tempfile.TemporaryDirectory(prefix="planisphere-graph-test-", dir="/private/tmp") as tmp:
             root = Path(tmp)
-            for folder in ["Notes", ".obsidian", ".hidden", "node_modules", "Ignored"]:
+            for folder in ["Notes", ".planisphere", ".hidden", "node_modules", "Ignored"]:
                 (root / folder).mkdir()
             notes = {"Read.md": "[[Notes/Target]] [[linked]] [[Ignored/Target]]", "Notes/Target.md": "# Target\n"}
             for name, body in {**notes, ".hidden/Hidden.md": "[[Read]]", "Ignored/Target.md": "", "node_modules/Dependency.md": ""}.items():
                 (root / name).write_text(body)
-            (root / ".obsidian/app.json").write_text(json.dumps({"userIgnoreFilters": ["Ignored/"]}))
+            (root / ".planisphere/scope.json").write_text(json.dumps({"excludedPaths": ["Ignored/"]}))
             (root / "linked.md").symlink_to(root / "Notes/Target.md")
             graph, _ = B.load_engine(PROJECT.parent / "Grapheine")
             with patch.object(B, "authority_scan", side_effect=AssertionError("graph must not inspect authority")):

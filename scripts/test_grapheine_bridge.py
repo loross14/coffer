@@ -112,7 +112,7 @@ class BridgeTests(unittest.TestCase):
         self.write(self.root / "Sales/Status.md", "# Sales\n[[shared]]")
         self.write(self.root / "Hiring/Status.md", "# Hiring\n[[shared]]")
         self.write(self.root / "shared.md", "# Shared")
-        self.write(self.root / ".obsidian/app.json", "{}")
+        self.write(self.root / ".planisphere/scope.json", "{}")
         (self.root / "attachment.bin").write_bytes(bytes([0, 42, 255]))
         before = B.snapshot(self.root)
         code, result = self.invoke("scan")
@@ -255,7 +255,7 @@ class BridgeTests(unittest.TestCase):
         self.write(self.root / "node_modules/Status.md", "# Dependency")
         self.write(self.root / ".hidden-checkout/Status.md", "# Hidden checkout")
         (self.root / ".hidden-checkout/core").symlink_to(self.base / "missing")
-        self.write(self.root / ".obsidian/app.json", json.dumps({"userIgnoreFilters": ["Ignored/", "Ignored file.md"]}))
+        self.write(self.root / ".planisphere/scope.json", json.dumps({"excludedPaths": ["Ignored/", "Ignored file.md"]}))
         code, result = self.invoke("scan")
         self.assertEqual(code, 0, result)
         self.assertEqual(result["notes"], 2)
@@ -272,7 +272,7 @@ class BridgeTests(unittest.TestCase):
         self.write(forbidden / "Secret.md", "not discovery evidence")
         self.write(self.root / "Included.md", "---\ncanonical_owner: " + str(forbidden / "Secret.md") + "\n---\n[secret](" + str(forbidden / "Secret.md") + ")")
         self.write(self.root / "Excluded/Secret.md", "not discovery evidence")
-        self.write(self.root / ".obsidian/app.json", json.dumps({"userIgnoreFilters": ["Excluded/"]}))
+        self.write(self.root / ".planisphere/scope.json", json.dumps({"excludedPaths": ["Excluded/"]}))
         (self.root / "linked.md").symlink_to(forbidden / "Secret.md")
         original_stat, original_read = Path.stat, Path.read_text
         def checked_stat(path, *args, **kwargs):
@@ -319,7 +319,7 @@ class BridgeTests(unittest.TestCase):
         self.write(self.root / "Keep.md", "# Keep")
         for number in range(105):
             self.write(self.root / ("binary-%03d.bin" % number), "binary")
-        self.write(self.root / ".obsidian/app.json", json.dumps({"userIgnoreFilters": ["*.md", "/regex/", "../outside", 7]}))
+        self.write(self.root / ".planisphere/scope.json", json.dumps({"excludedPaths": ["*.md", "/regex/", "../outside", 7]}))
         result = B.scan(self.G, self.A, self.root)
         scope = result["scope"]
         self.assertEqual(result["notes"], 1)
@@ -331,11 +331,11 @@ class BridgeTests(unittest.TestCase):
 
     def test_exclusion_change_during_scan_invalidates_result(self):
         self.write(self.root / "note.md", "# Note")
-        self.write(self.root / ".obsidian/app.json", "{}")
+        self.write(self.root / ".planisphere/scope.json", "{}")
         original = self.G._accounts_payload
         def changing_rules(*args, **kwargs):
             result = original(*args, **kwargs)
-            self.write(self.root / ".obsidian/app.json", json.dumps({"userIgnoreFilters": ["note.md"]}))
+            self.write(self.root / ".planisphere/scope.json", json.dumps({"excludedPaths": ["note.md"]}))
             return result
         with patch.object(self.G, "_accounts_payload", side_effect=changing_rules):
             with self.assertRaisesRegex(B.BridgeError, "scope changed while scanning"):
@@ -356,7 +356,7 @@ class BridgeTests(unittest.TestCase):
 
     def test_excluded_invalid_markdown_is_not_opened(self):
         self.write(self.root / "Good.md", "# Good")
-        self.write(self.root / ".obsidian/app.json", json.dumps({"userIgnoreFilters": ["Excluded/"]}))
+        self.write(self.root / ".planisphere/scope.json", json.dumps({"excludedPaths": ["Excluded/"]}))
         self.write(self.root / "Excluded/Bad.md", "placeholder")
         (self.root / "Excluded/Bad.md").write_bytes(b"bad \xff")
         code, result = self.invoke("scan")
@@ -365,7 +365,7 @@ class BridgeTests(unittest.TestCase):
 
     def test_unreadable_exclusion_config_does_not_silently_ignore_rules(self):
         self.write(self.root / "Good.md", "# Good")
-        self.write(self.root / ".obsidian/app.json", "not JSON")
+        self.write(self.root / ".planisphere/scope.json", "not JSON")
         code, result = self.invoke("scan")
         self.assertNotEqual(code, 0)
         self.assertIn("exclusion settings", result["error"])

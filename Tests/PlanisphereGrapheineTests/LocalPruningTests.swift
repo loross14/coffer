@@ -39,7 +39,7 @@ final class LocalPruningTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(packet.originals["older.md"], Data("# Older\r\nCafé\n".utf8))
         XCTAssertEqual(packet.changes.first?.before, "# Older\r\nCafé\n")
         XCTAssertTrue(try XCTUnwrap(packet.changes.first).isRetired)
-        XCTAssertEqual(packet.scope.version, 2)
+        XCTAssertEqual(packet.scope.version, 4)
         XCTAssertEqual(packet.scope.excludedPaths, ["Archive/"])
         XCTAssertNil(packet.scope.sourceConfigurationSHA256)
     }
@@ -132,7 +132,7 @@ final class LocalPruningTests: XCTestCase, @unchecked Sendable {
                 "value": "current.md", "members": ["current.md", "older.md"],
                 "files": ["current.md": String(repeating: "b", count: 64), "older.md": String(repeating: "c", count: 64),
                           "reader.md": String(repeating: "d", count: 64)],
-                "scope": ["version": 2, "excludedPaths": ["Archive/"], "sourceConfigurationSHA256": NSNull()] as [String: Any],
+                "scope": ["version": 4, "excludedPaths": ["Archive/"], "sourceConfigurationSHA256": NSNull()] as [String: Any],
                 "changes": ["older.md": NSNull(), "reader.md": "[[current|older]]\n"] as [String: Any],
                 "originals": ["older.md": Data("# Older\r\nCafé\n".utf8).base64EncodedString(),
                               "reader.md": Data("[[older]]\n".utf8).base64EncodedString()],

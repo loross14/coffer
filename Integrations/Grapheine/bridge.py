@@ -25,9 +25,9 @@ import types
 import unicodedata
 
 sys.dont_write_bytecode = True
-ENGINE_COMMIT = "c013207c1fb1140fd20819fb61e1b7a25980ea88"
+ENGINE_COMMIT = "6f15793669841400684dc0ed8606516021b0ad72"
 ENGINE_HASHES = {
-    "grapheine.py": "5d14831ad9ae36532ed482daccd35d3847b38287f8e6c55c90891d6ff4560584",
+    "grapheine.py": "ba72179e5bf54bd1f59fbb2ac98c1591cdedc52bc948c4f4327c98b38cb0fce2",
     "grapheine_authority.py": "cc531bd2abc8c9a8e3174ed180aeb1269497d118366bb7985c51d6c866b097a4",
 }
 MAX_JSON_BYTES = 32 * 1024 * 1024
@@ -259,7 +259,7 @@ MAX_SCOPE_ITEMS = 100
 DISCOVERY_LIMITATIONS = [
     "Discovery covers included Markdown only. Its fingerprint does not verify whole-vault write eligibility or authorize pruning.",
     "Hidden directories, engine dependency directories, non-Markdown files, symbolic links and special entries are excluded. A listed folder represents its entire subtree.",
-    "Obsidian userIgnoreFilters supports literal root-relative folder and file paths with exact spelling. Regex, glob, absolute, traversal and non-string filters are reported unsupported; full Obsidian filter semantics are not implemented.",
+    "Planisphere excludedPaths supports literal root-relative folder and file paths with exact spelling. Regex, glob, absolute, traversal and non-string filters are reported unsupported; full Planisphere filter semantics are not implemented.",
     "Graph links and canonical-owner paths resolve only to included notes. Absolute paths inside the original vault are mapped to included copies; external or excluded targets are omitted. Note bytes are not rewritten.",
     "Optional authority review and write preparation retain strict whole-vault checks, independently of discovery exclusions.",
 ]
@@ -271,22 +271,22 @@ def discovery_config(root):
     configfd = None
     try:
         try:
-            info = os.stat(".obsidian", dir_fd=rootfd, follow_symlinks=False)
+            info = os.stat(".planisphere", dir_fd=rootfd, follow_symlinks=False)
         except FileNotFoundError:
             return {"identity": "absent", "applied": [], "unsupported": []}
         if not stat.S_ISDIR(info.st_mode):
-            raise BridgeError("Obsidian exclusion settings are unavailable: .obsidian is not a regular directory.")
-        configfd = os.open(".obsidian", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=rootfd)
+            raise BridgeError("Planisphere exclusion settings are unavailable: .planisphere is not a regular directory.")
+        configfd = os.open(".planisphere", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=rootfd)
         try:
-            info = os.stat("app.json", dir_fd=configfd, follow_symlinks=False)
+            info = os.stat("scope.json", dir_fd=configfd, follow_symlinks=False)
         except FileNotFoundError:
             return {"identity": "absent", "applied": [], "unsupported": []}
         if not stat.S_ISREG(info.st_mode) or info.st_size > 2 * 1024 * 1024:
-            raise BridgeError("Obsidian app.json must be a regular configuration file no larger than 2 MiB.")
-        descriptor = os.open("app.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=configfd)
+            raise BridgeError("Planisphere scope.json must be a regular configuration file no larger than 2 MiB.")
+        descriptor = os.open("scope.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=configfd)
         try:
             if stamp(info) != stamp(os.fstat(descriptor)):
-                raise BridgeError("Obsidian exclusion settings changed during reading. Scan again.")
+                raise BridgeError("Planisphere exclusion settings changed during reading. Scan again.")
             chunks, total = [], 0
             while True:
                 chunk = os.read(descriptor, 65536)
@@ -294,10 +294,10 @@ def discovery_config(root):
                     break
                 total += len(chunk)
                 if total > 2 * 1024 * 1024:
-                    raise BridgeError("Obsidian app.json exceeds the 2 MiB configuration limit.")
+                    raise BridgeError("Planisphere scope.json exceeds the 2 MiB configuration limit.")
                 chunks.append(chunk)
             if stamp(info) != stamp(os.fstat(descriptor)):
-                raise BridgeError("Obsidian exclusion settings changed during reading. Scan again.")
+                raise BridgeError("Planisphere exclusion settings changed during reading. Scan again.")
             raw = b"".join(chunks)
         finally:
             os.close(descriptor)
@@ -307,11 +307,11 @@ def discovery_config(root):
         os.close(rootfd)
     try:
         document = json.loads(raw.decode("utf-8"))
-        filters = document.get("userIgnoreFilters", [])
+        filters = document.get("excludedPaths", [])
         if not isinstance(filters, list) or len(filters) > 4096:
-            raise ValueError("userIgnoreFilters must be a list with at most 4,096 entries")
+            raise ValueError("excludedPaths must be a list with at most 4,096 entries")
     except (UnicodeError, ValueError, AttributeError) as exc:
-        raise BridgeError("Obsidian exclusion settings could not be read safely: " + str(exc)) from exc
+        raise BridgeError("Planisphere exclusion settings could not be read safely: " + str(exc)) from exc
     applied, unsupported = [], []
     for rule in filters:
         if (not isinstance(rule, str) or not rule or len(rule.encode("utf-8")) > 4096
@@ -365,7 +365,7 @@ def discovery_inventory(root, graph, destination=None, *, strict=False):
                 raise BridgeError("Vault changed while scanning. Scan again.") from exc
             is_directory = stat.S_ISDIR(info.st_mode)
             if relative in exact_rules:
-                exclude(relative, "Obsidian exclusion", is_directory)
+                exclude(relative, "Planisphere exclusion", is_directory)
                 continue
             if is_directory and (name.startswith(".") or name in graph.SKIP_DIRS):
                 exclude(relative, "hidden or engine directory", True)
@@ -573,7 +573,7 @@ def scan(graph, authority, root, policy=None):
         diagnostics.append("Showing the first 200 candidate groups; additional groups exist.")
     diagnostics.append("Discovery freshness covers included Markdown and exclusions, not attachment contents or whole-vault write readiness.")
     if before["config"]["unsupported"]:
-        diagnostics.append("Some Obsidian exclusion filters are unsupported and were not applied; review the listed scope limitations.")
+        diagnostics.append("Some Planisphere exclusion filters are unsupported and were not applied; review the listed scope limitations.")
     return {"engineVersion": graph.__version__, "scannedAt": datetime.now(timezone.utc).isoformat(),
             "vaultPath": str(root), "notes": accounts["notes"],
             "totalGroups": accounts["candidate_group_count"], "groups": groups,
@@ -646,7 +646,7 @@ def prepare_local(graph, authority, root, members, keep, fingerprint):
         payload = {"schema": LOCAL_SCHEMA, "engineCommit": ENGINE_COMMIT,
                    "vault": str(root), "value": keep, "members": sorted(members),
                    "files": before["files"], "fingerprint": fingerprint,
-                   "scope": {"version": 2, "excludedPaths": before["config"]["applied"],
+                   "scope": {"version": 4, "excludedPaths": before["config"]["applied"],
                              "sourceConfigurationSHA256": None if before["config"]["identity"] == "absent" else before["config"]["identity"]},
                    "changes": changes,
                    "originals": {name: base64.b64encode((stage / name).read_bytes()).decode("ascii") for name in changes},

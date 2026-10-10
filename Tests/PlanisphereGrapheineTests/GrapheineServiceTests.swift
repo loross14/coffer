@@ -24,15 +24,15 @@ final class GrapheineServiceTests: XCTestCase, @unchecked Sendable {
         let fixture = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
             .appendingPathComponent("planisphere-scoped-scan-" + UUID().uuidString)
         let manager = FileManager.default
-        for path in ["Archive", "Ignored", "node_modules", ".hidden-checkout", ".obsidian"] {
+        for path in ["Archive", "Ignored", "node_modules", ".hidden-checkout", ".planisphere"] {
             try manager.createDirectory(at: fixture.appendingPathComponent(path), withIntermediateDirectories: true)
         }
         defer { try? manager.removeItem(at: fixture) }
         for path in ["Status.md", "Archive/Status.md", "Ignored/Status.md", "node_modules/Status.md"] {
             try Data("# \(path)\n".utf8).write(to: fixture.appendingPathComponent(path))
         }
-        try JSONSerialization.data(withJSONObject: ["userIgnoreFilters": ["Ignored/"]])
-            .write(to: fixture.appendingPathComponent(".obsidian/app.json"))
+        try JSONSerialization.data(withJSONObject: ["excludedPaths": ["Ignored/"]])
+            .write(to: fixture.appendingPathComponent(".planisphere/scope.json"))
         try manager.createSymbolicLink(at: fixture.appendingPathComponent(".hidden-checkout/loop"), withDestinationURL: fixture)
         try manager.createSymbolicLink(at: fixture.appendingPathComponent("linked.md"), withDestinationURL: fixture.appendingPathComponent("Status.md"))
 

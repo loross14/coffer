@@ -9,7 +9,7 @@ final class MarkdownMutationTests: XCTestCase, @unchecked Sendable {
 
     private func setup(_ f: Fixture) async throws -> (VaultRecord, MarkdownMutationPlan) {
         for (path, text) in originals { try f.write(path, text) }
-        try f.write(".obsidian/app.json", #"{"userIgnoreFilters":[]}"#)
+        try f.write(".planisphere/scope.json", #"{"excludedPaths":[]}"#)
         try f.write("attachment.bin", Data([0, 255, 1]))
         let vault = try await f.store.register(url: f.source)
         let review = try await f.store.checkpointPlan(vaultID: vault.id, mode: .markdownOnly)
@@ -69,7 +69,7 @@ final class MarkdownMutationTests: XCTestCase, @unchecked Sendable {
             let (vault, plan) = try await setup(f)
             if scenario == "unrelated-note" { try f.write("untouched.md", "editor changed this") }
             if scenario == "new-note" { try f.write("new.md", "new note") }
-            if scenario == "settings" { try f.write(".obsidian/app.json", #"{"userIgnoreFilters":["untouched.md"]}"#) }
+            if scenario == "settings" { try f.write(".planisphere/scope.json", #"{"excludedPaths":["untouched.md"]}"#) }
             await expectFailure { try await f.store.applyMarkdownMutation(plan) }
             XCTAssertEqual(try String(contentsOf: f.source.appendingPathComponent("a.md"), encoding: .utf8), originals["a.md"])
             let history = try await f.store.checkpoints(vaultID: vault.id)

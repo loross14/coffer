@@ -158,7 +158,7 @@ public struct LocalPruningPacket: Sendable {
             value.count == 64 && value.allSatisfy { "0123456789abcdef".contains($0) }
         }
         guard packet.schema == "planisphere-local-prune-v1", validDigest(envelope.digest),
-              packet.scope.version == 2, packet.members.count >= 2, packet.members.count <= 1_000,
+              packet.scope.version == 4, packet.members.count >= 2, packet.members.count <= 1_000,
               Set(packet.members).count == packet.members.count, packet.members.contains(packet.value),
               packet.files.count <= 250_000, !packet.changes.isEmpty, packet.changes.count <= 10_000,
               packet.scope.excludedPaths.count <= 4_096, packet.limitations.count <= 100,

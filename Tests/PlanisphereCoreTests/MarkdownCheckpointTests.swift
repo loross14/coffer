@@ -21,8 +21,8 @@ final class MarkdownCheckpointTests: XCTestCase, @unchecked Sendable {
         let f = try Fixture(); defer { f.clean() }
         let notes = ["Welcome.md": "# Welcome\n", "Research/Decisions/current.md": "# Decision\n", "Research/draft.md": "draft\n"]
         for (path, text) in notes { try f.write(path, text) }
-        try f.write(".obsidian/app.json", #"{"userIgnoreFilters":["private.md","ignored/","*.tmp"]}"#)
-        for path in ["private.md", "ignored/old.md", ".obsidian/plugin/readme.md", ".hidden/secret.md", "node_modules/readme.md", "__pycache__/generated.md", "Uppercase.MD", "attachments/image.png", "Research/diagram.pdf", "binary-only/nested/asset.bin"] {
+        try f.write(".planisphere/scope.json", #"{"excludedPaths":["private.md","ignored/","*.tmp"]}"#)
+        for path in ["private.md", "ignored/old.md", ".planisphere/plugin/readme.md", ".hidden/secret.md", "node_modules/readme.md", "__pycache__/generated.md", "Uppercase.MD", "attachments/image.png", "Research/diagram.pdf", "binary-only/nested/asset.bin"] {
             try f.write(path, "excluded")
         }
         try FileManager.default.createDirectory(at: f.source.appendingPathComponent("empty/nested"), withIntermediateDirectories: true)
@@ -35,9 +35,9 @@ final class MarkdownCheckpointTests: XCTestCase, @unchecked Sendable {
         let vault = try await f.store.register(url: f.source)
         let plan = try await f.store.checkpointPlan(vaultID: vault.id, mode: .markdownOnly)
         let scope = try XCTUnwrap(plan.scope)
-        XCTAssertEqual(scope.version, 2)
+        XCTAssertEqual(scope.version, 4)
         XCTAssertEqual(scope.mode, .markdownOnly)
-        XCTAssertEqual(scope.sourceConfigurationSHA256, VaultFS.hash(try Data(contentsOf: f.source.appendingPathComponent(".obsidian/app.json"))))
+        XCTAssertEqual(scope.sourceConfigurationSHA256, VaultFS.hash(try Data(contentsOf: f.source.appendingPathComponent(".planisphere/scope.json"))))
         XCTAssertEqual(plan.fileCount, 3)
         XCTAssertEqual(plan.directoryCount, 2)
         XCTAssertEqual(plan.symbolicLinkCount, 0)
@@ -76,7 +76,7 @@ final class MarkdownCheckpointTests: XCTestCase, @unchecked Sendable {
         let f = try Fixture(); defer { f.clean() }
         try f.write("note.md", "note")
         try f.write("assets/image.bin", "old attachment")
-        try f.write(".obsidian/app.json", #"{"userIgnoreFilters":[]}"#)
+        try f.write(".planisphere/scope.json", #"{"excludedPaths":[]}"#)
         let vault = try await f.store.register(url: f.source)
         let plan = try await f.store.checkpointPlan(vaultID: vault.id, mode: .markdownOnly)
         let imageURL = f.source.appendingPathComponent("assets/image.bin")
@@ -84,8 +84,8 @@ final class MarkdownCheckpointTests: XCTestCase, @unchecked Sendable {
         let saved = try await f.store.createCheckpoint(vaultID: vault.id, message: "No attachment", scope: plan.scope)
         XCTAssertEqual(saved.entries.map(\.path), ["note.md"])
 
-        let configURL = f.source.appendingPathComponent(".obsidian/app.json")
-        await f.store.setCaptureValidationHook { try Data(#"{"userIgnoreFilters":["note.md"]}"#.utf8).write(to: configURL) }
+        let configURL = f.source.appendingPathComponent(".planisphere/scope.json")
+        await f.store.setCaptureValidationHook { try Data(#"{"excludedPaths":["note.md"]}"#.utf8).write(to: configURL) }
         await expectFailure { try await f.store.createCheckpoint(vaultID: vault.id, message: "Stale config", scope: plan.scope) }
         await f.store.setCaptureValidationHook(nil)
         let history = try await f.store.checkpoints(vaultID: vault.id)
@@ -107,8 +107,8 @@ final class MarkdownCheckpointTests: XCTestCase, @unchecked Sendable {
             case "link": entries.append(FileEntry(path: "link.md", kind: .symbolicLink, digest: original.digest, size: original.size))
             case "unrelated-directory": entries.append(FileEntry(path: "empty", kind: .directory))
             default:
-                entries.append(FileEntry(path: ".obsidian", kind: .directory))
-                entries.append(FileEntry(path: ".obsidian/hidden.md", kind: .file, digest: original.digest, size: original.size))
+                entries.append(FileEntry(path: ".planisphere", kind: .directory))
+                entries.append(FileEntry(path: ".planisphere/hidden.md", kind: .file, digest: original.digest, size: original.size))
             }
             let forged = Checkpoint(formatVersion: 2, id: saved.id, vaultID: saved.vaultID, parentID: nil,
                                     createdAt: saved.createdAt, message: saved.message, entries: entries, captureScope: saved.captureScope)

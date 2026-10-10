@@ -296,8 +296,6 @@ struct VaultWorkspaceView: View {
                 }
                 Menu {
                     Button("Open in Finder", systemImage: "folder") { model.openSelectedVault() }
-                    Button("Open in Obsidian", systemImage: "arrow.up.forward.app") { model.openInObsidian() }
-                        .disabled(!model.canOpenObsidian)
                     Divider()
                     Button("Export Vault…", systemImage: "square.and.arrow.up") { model.exportVault() }
                         .disabled(model.checkpoints.isEmpty || model.historyReadError != nil)
@@ -508,8 +506,8 @@ struct VaultWorkspaceView: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Saved \(model.checkpointModeTitle(scope.mode)) scope").font(.headline)
             Text(scope.mode == .markdownOnly
-                 ? "This checkpoint contains regular .md notes only. Attachments, settings, symbolic links, hidden folders including .obsidian, dependency folders, and the literal paths below are excluded. Excluded content is absent from recovered copies."
-                 : "This checkpoint excludes hidden folders outside .obsidian settings, node_modules, __pycache__, and the literal paths below. Explicit paths can also exclude Obsidian settings. Excluded content is absent from recovered copies.")
+                 ? "This checkpoint contains regular .md notes only. Attachments, settings, symbolic links, hidden folders including .planisphere, dependency folders, and the literal paths below are excluded. Excluded content is absent from recovered copies."
+                 : "This checkpoint excludes hidden folders outside .planisphere settings, node_modules, __pycache__, and the literal paths below. Explicit paths can also exclude Planisphere settings. Excluded content is absent from recovered copies.")
                 .font(.callout).foregroundStyle(.secondary)
             Text("\(scope.excludedPaths.count) saved path rules").font(.caption.weight(.semibold))
             ScrollView {

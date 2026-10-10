@@ -14,7 +14,7 @@ public struct CheckpointScope: Codable, Equatable, Sendable {
 
     // Version 1 retains its original encoded shape and Vault Content behavior.
     // A computed mode does not alter the checksums of existing manifests.
-    public var mode: CheckpointMode { version == 2 ? .markdownOnly : .vaultContent }
+    public var mode: CheckpointMode { [2, 4].contains(version) ? .markdownOnly : .vaultContent }
 
     public static func markdownOnly(excludedPaths: [String], sourceConfigurationSHA256: String?) throws -> CheckpointScope {
         let scope = CheckpointScope(excludedPaths: excludedPaths, sourceConfigurationSHA256: sourceConfigurationSHA256, mode: .markdownOnly)
@@ -23,7 +23,7 @@ public struct CheckpointScope: Codable, Equatable, Sendable {
     }
 
     internal init(excludedPaths: [String], sourceConfigurationSHA256: String?, mode: CheckpointMode = .vaultContent) {
-        version = mode == .markdownOnly ? 2 : 1
+        version = mode == .markdownOnly ? 4 : 3
         self.excludedPaths = excludedPaths
         self.sourceConfigurationSHA256 = sourceConfigurationSHA256
     }
@@ -37,16 +37,17 @@ public struct CheckpointScope: Codable, Equatable, Sendable {
             let target = rule.hasSuffix("/") ? String(rule.dropLast()) : rule
             // Match the path itself without probing whether a link points to a folder.
             if path == target {
-                return "Obsidian excluded path"
+                return "Planisphere excluded path"
             }
-            if path.hasPrefix(target + "/") { return "Obsidian excluded path" }
+            if path.hasPrefix(target + "/") { return "Planisphere excluded path" }
         }
         // Settings are part of the vault, including plugins' hidden state. Only
         // explicit user filters may omit entries inside this configuration tree.
-        if mode == .vaultContent && (path == ".obsidian" || path.hasPrefix(".obsidian/")) { return nil }
+        let settingsFolder = version <= 2 ? ".obsidian" : ".planisphere"
+        if mode == .vaultContent && (path == settingsFolder || path.hasPrefix(settingsFolder + "/")) { return nil }
         let name = path.split(separator: "/").last.map(String.init) ?? path
         if isDirectory && name.hasPrefix(".") {
-            return mode == .markdownOnly ? "Hidden folder" : "Hidden folder outside Obsidian settings"
+            return mode == .markdownOnly ? "Hidden folder" : "Hidden folder outside saved settings"
         }
         if isDirectory && ["node_modules", "__pycache__"].contains(name) {
             return "Generated dependency folder"
@@ -60,7 +61,7 @@ public struct CheckpointScope: Codable, Equatable, Sendable {
     }
 
     internal func validate() throws {
-        guard [1, 2].contains(version), excludedPaths.count <= 4096,
+        guard [1, 2, 3, 4].contains(version), excludedPaths.count <= 4096,
               excludedPaths == Array(Set(excludedPaths)).sorted(),
               excludedPaths.allSatisfy(Self.isLiteralPath) else {
             throw VaultStoreError.corrupt("invalid checkpoint content scope")
@@ -73,8 +74,11 @@ public struct CheckpointScope: Codable, Equatable, Sendable {
     }
 
     internal func verifySource(_ source: VaultFS.Handle) throws {
+        guard version >= 3 else {
+            throw VaultStoreError.invalid("This review used retired scope settings. Review again with Planisphere settings before saving.")
+        }
         guard try Self.load(source, mode: mode).scope == self else {
-            throw VaultStoreError.invalid("Obsidian exclusions changed after review. Review the checkpoint again before saving.")
+            throw VaultStoreError.invalid("Planisphere exclusions changed after review. Review the checkpoint again before saving.")
         }
     }
 
@@ -89,23 +93,23 @@ public struct CheckpointScope: Codable, Equatable, Sendable {
 
     internal static func load(_ source: VaultFS.Handle, mode: CheckpointMode = .vaultContent) throws -> (scope: CheckpointScope, unsupported: [String]) {
         let data: Data?
-        if let folderInfo = try VaultFS.entryInfo(source, ".obsidian") {
+        if let folderInfo = try VaultFS.entryInfo(source, ".planisphere") {
             guard folderInfo.st_mode & S_IFMT == S_IFDIR else {
-                throw VaultStoreError.invalid("Obsidian settings must be a real folder before reviewing vault content.")
+                throw VaultStoreError.invalid("Planisphere settings must be a real folder before reviewing vault content.")
             }
-            let settings = try VaultFS.childDirectory(source, ".obsidian")
-            if try VaultFS.entryInfo(settings, "app.json") != nil {
+            let settings = try VaultFS.childDirectory(source, ".planisphere")
+            if try VaultFS.entryInfo(settings, "scope.json") != nil {
                 data = try readConfiguration(settings)
             } else { data = nil }
         } else { data = nil }
         var includedRules: [String] = [], unsupported: [String] = []
         if let data {
             guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                throw VaultStoreError.invalid("Obsidian app.json is not a settings object. Whole Folder remains available.")
+                throw VaultStoreError.invalid("Planisphere scope.json is not a settings object. Whole Folder remains available.")
             }
-            if let raw = object["userIgnoreFilters"] {
+            if let raw = object["excludedPaths"] {
                 guard let filters = raw as? [Any], filters.count <= 4096 else {
-                    throw VaultStoreError.invalid("Obsidian's excluded paths list is invalid or exceeds 4,096 rules.")
+                    throw VaultStoreError.invalid("Planisphere's excluded paths list is invalid or exceeds 4,096 rules.")
                 }
                 for filter in filters {
                     guard let value = filter as? String, isLiteralPath(value) else {
@@ -122,19 +126,19 @@ public struct CheckpointScope: Codable, Equatable, Sendable {
     }
 
     private static func readConfiguration(_ settings: VaultFS.Handle) throws -> Data {
-        let file = try VaultFS.Handle(openat(settings.fd, "app.json", O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC))
+        let file = try VaultFS.Handle(openat(settings.fd, "scope.json", O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC))
         let before = try VaultFS.info(file)
         let limit = 2 * 1024 * 1024
         guard before.st_mode & S_IFMT == S_IFREG, before.st_size >= 0, before.st_size <= limit else {
-            throw VaultStoreError.invalid("Obsidian app.json must be a regular settings file under 2 MiB.")
+            throw VaultStoreError.invalid("Planisphere scope.json must be a regular settings file under 2 MiB.")
         }
         var data = Data(), buffer = [UInt8](repeating: 0, count: 65536)
         while true {
             let count = buffer.withUnsafeMutableBytes { Darwin.read(file.fd, $0.baseAddress, $0.count) }
             if count < 0 && errno == EINTR { continue }
-            guard count >= 0 else { throw VaultFS.unavailable("Could not read Obsidian exclusions") }
+            guard count >= 0 else { throw VaultFS.unavailable("Could not read Planisphere exclusions") }
             if count == 0 { break }
-            guard data.count + count <= limit else { throw VaultStoreError.invalid("Obsidian settings grew during review.") }
+            guard data.count + count <= limit else { throw VaultStoreError.invalid("Planisphere settings grew during review.") }
             data.append(contentsOf: buffer.prefix(count))
         }
         guard VaultFS.Stamp(before) == VaultFS.Stamp(try VaultFS.info(file)), data.count == before.st_size else {

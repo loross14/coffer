@@ -135,9 +135,9 @@ final class SymbolicLinkCheckpointTests: XCTestCase, @unchecked Sendable {
 
     func testReviewedContentScopePreservesIncludedBytesAndRecordsExclusions() async throws {
         let f = try Fixture(); defer { f.clean() }
-        let config = Data("{\"userIgnoreFilters\":[\"ignored/\",\"ignored-file.txt\"]}".utf8)
-        try f.write(".obsidian/app.json", config)
-        try f.write(".obsidian/plugins/plugin/data.json", "settings")
+        let config = Data("{\"excludedPaths\":[\"ignored/\",\"ignored-file.txt\"]}".utf8)
+        try f.write(".planisphere/scope.json", config)
+        try f.write(".planisphere/plugins/plugin/data.json", "settings")
         try f.write("assets/picture.bin", Data([0, 255, 10]))
         try f.write("note.md", "retained")
         try f.write(".env", "included hidden file")
@@ -158,7 +158,7 @@ final class SymbolicLinkCheckpointTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(saved.fileCount, plan.fileCount)
         XCTAssertEqual(saved.symbolicLinkCount, plan.symbolicLinkCount)
         let paths = Set(saved.entries.map(\.path))
-        XCTAssertTrue(paths.contains(".obsidian/plugins/plugin/data.json"))
+        XCTAssertTrue(paths.contains(".planisphere/plugins/plugin/data.json"))
         XCTAssertTrue(paths.contains("assets/picture.bin"))
         XCTAssertTrue(paths.contains(".env"))
         XCTAssertFalse(paths.contains("ignored"))
@@ -168,7 +168,7 @@ final class SymbolicLinkCheckpointTests: XCTestCase, @unchecked Sendable {
         let history = try await f.store.checkpoints(vaultID: restored.id)
         XCTAssertEqual(history[0].captureScope, scope)
         XCTAssertEqual(history[0].formatVersion, 2)
-        XCTAssertEqual(try Data(contentsOf: restored.url.appendingPathComponent(".obsidian/app.json")), config)
+        XCTAssertEqual(try Data(contentsOf: restored.url.appendingPathComponent(".planisphere/scope.json")), config)
         XCTAssertFalse(FileManager.default.fileExists(atPath: restored.url.appendingPathComponent("ignored").path))
         XCTAssertEqual(try target(at: restored.url.appendingPathComponent("reference")), Data("ignored/deep/old.md".utf8))
         let exported = try await f.store.exportVault(vaultID: vault.id, destination: f.base.appendingPathComponent("Scoped export"))
@@ -176,7 +176,7 @@ final class SymbolicLinkCheckpointTests: XCTestCase, @unchecked Sendable {
         XCTAssertFalse(FileManager.default.fileExists(atPath: exported.appendingPathComponent("files/node_modules").path))
         // Full-folder behavior remains explicit and refuses the FIFO instead of omitting it.
         await expectFailure { try await f.store.createCheckpoint(vaultID: vault.id, message: "Full folder") }
-        try f.write(".obsidian/app.json", "{\"userIgnoreFilters\":[\"ignored/\",\"assets/\"]}")
+        try f.write(".planisphere/scope.json", "{\"excludedPaths\":[\"ignored/\",\"assets/\"]}")
         await expectFailure { try await f.store.createCheckpoint(vaultID: vault.id, message: "Stale scope", scope: scope) }
         let unchanged = try await f.store.checkpoints(vaultID: vault.id)
         XCTAssertEqual(unchanged.map(\.id), [saved.id])
@@ -184,13 +184,13 @@ final class SymbolicLinkCheckpointTests: XCTestCase, @unchecked Sendable {
 
     func testExcludedConfigurationRemainsPinnedThroughCapture() async throws {
         let f = try Fixture(); defer { f.clean() }
-        try f.write(".obsidian/app.json", "{\"userIgnoreFilters\":[\".obsidian/app.json\"]}")
+        try f.write(".planisphere/scope.json", "{\"excludedPaths\":[\".planisphere/scope.json\"]}")
         try f.write("note.md", "included")
         let vault = try await f.store.register(url: f.source)
         let plan = try await f.store.checkpointPlan(vaultID: vault.id, mode: .vaultContent)
         let scope = try XCTUnwrap(plan.scope)
-        let configurationURL = f.source.appendingPathComponent(".obsidian/app.json")
-        let changed = Data("{\"userIgnoreFilters\":[\".obsidian/app.json\"],\"changed\":true}".utf8)
+        let configurationURL = f.source.appendingPathComponent(".planisphere/scope.json")
+        let changed = Data("{\"excludedPaths\":[\".planisphere/scope.json\"],\"changed\":true}".utf8)
         await f.store.setCaptureValidationHook { try changed.write(to: configurationURL) }
         await expectFailure { try await f.store.createCheckpoint(vaultID: vault.id, message: "Configuration changed", scope: scope) }
         await f.store.setCaptureValidationHook(nil)
@@ -199,7 +199,7 @@ final class SymbolicLinkCheckpointTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(try Data(contentsOf: configurationURL), changed)
         let updatedPlan = try await f.store.checkpointPlan(vaultID: vault.id, mode: .vaultContent)
         let saved = try await f.store.createCheckpoint(vaultID: vault.id, message: "Reviewed again", scope: updatedPlan.scope)
-        XCTAssertFalse(saved.entries.contains { $0.path == ".obsidian/app.json" })
+        XCTAssertFalse(saved.entries.contains { $0.path == ".planisphere/scope.json" })
         XCTAssertNotEqual(saved.captureScope, scope)
     }
 }

@@ -62,7 +62,7 @@ class LocalPruningTests(unittest.TestCase):
             self.assertEqual(self.verify(packet), packet)
         payload = packet["packet"]
         self.assertEqual(payload["schema"], B.LOCAL_SCHEMA)
-        self.assertEqual(payload["scope"]["version"], 2)
+        self.assertEqual(payload["scope"]["version"], 4)
         self.assertIsNone(payload["changes"]["Archive/Record.md"])
         self.assertIn("[[Current/Record|earlier]]", payload["changes"]["reader.md"])
         self.assertIn("[earlier](Current/Record.md)", payload["changes"]["reader.md"])
@@ -74,7 +74,7 @@ class LocalPruningTests(unittest.TestCase):
         self.assertFalse((self.root / ".git").exists())
 
     def test_mixed_workspace_skips_links_binaries_and_literal_exclusions(self):
-        self.write(".obsidian/app.json", json.dumps({"userIgnoreFilters": ["generated (copy)/"]}))
+        self.write(".planisphere/scope.json", json.dumps({"excludedPaths": ["generated (copy)/"]}))
         self.write("generated (copy)/Record.md", "# Excluded\n")
         self.write("generated (copy)/broken.md", "# Excluded\n")
         self.write("attachment.bin", "unchanged attachment")
@@ -92,7 +92,7 @@ class LocalPruningTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "changed since scanning"):
             self.verify(packet)
         packet = self.prepare()
-        self.write(".obsidian/app.json", "{}")
+        self.write(".planisphere/scope.json", "{}")
         with self.assertRaisesRegex(ValueError, "changed since scanning"):
             self.verify(packet)
 

@@ -92,7 +92,6 @@ final class VaultAppModel {
     }
     var selectedCheckpoint: Checkpoint? { checkpoints.first { $0.id == selectedCheckpointID } }
     var selectedChange: FileChange? { changes.first { $0.path == selectedChangePath } }
-    var canOpenObsidian: Bool { NSWorkspace.shared.urlForApplication(withBundleIdentifier: "md.obsidian") != nil }
     var selectedPruningGroup: PruningGroup? { pruningScan?.groups.first { $0.id == selectedPruningGroupID } }
     var selectedPruningQuestion: PruningQuestion? { pruningScan?.authority.questions.first { $0.id == selectedPruningQuestionID } }
     var selectedPruningChange: PruningChange? { pruningPacket?.changes.first { $0.path == selectedPruningChangePath } }
@@ -310,18 +309,6 @@ final class VaultAppModel {
     func openSelectedVault() {
         guard let vault = selectedVault else { return }
         if !NSWorkspace.shared.open(vault.url) { errorMessage = "Finder could not open this folder. It may have moved or become unavailable. Its retained history is still preserved." }
-    }
-
-    func openInObsidian() {
-        guard let vault = selectedVault else { return }
-        var components = URLComponents()
-        components.scheme = "obsidian"
-        components.host = "open"
-        components.queryItems = [URLQueryItem(name: "path", value: vault.path)]
-        guard let url = components.url, NSWorkspace.shared.open(url) else {
-            errorMessage = "Obsidian could not open this vault. Open the folder in Obsidian first, or use Finder to choose your editor."
-            return
-        }
     }
 
     func reveal(_ url: URL) { NSWorkspace.shared.activateFileViewerSelecting([url]) }

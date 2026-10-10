@@ -238,7 +238,7 @@ struct PruningView: View {
             Text("Discovery only. This scan does not verify the whole vault or approve changes.")
                 .font(.caption).foregroundStyle(.secondary).lineSpacing(3)
             if !scan.scope.unsupportedFilters.isEmpty {
-                Label("Some Obsidian exclusions could not be applied. Review the scope details.", systemImage: "exclamationmark.circle")
+                Label("Some Planisphere exclusions could not be applied. Review the scope details.", systemImage: "exclamationmark.circle")
                     .font(.caption).foregroundStyle(.orange)
             }
             DisclosureGroup("Scope & exclusions") {
@@ -255,10 +255,10 @@ struct PruningView: View {
                         }
                     }
                     if !scan.scope.appliedFilters.isEmpty {
-                        scopeLines("Applied Obsidian exclusions", scan.scope.appliedFilters)
+                        scopeLines("Applied Planisphere exclusions", scan.scope.appliedFilters)
                     }
                     if !scan.scope.unsupportedFilters.isEmpty {
-                        scopeLines("Obsidian exclusions not applied", scan.scope.unsupportedFilters)
+                        scopeLines("Planisphere exclusions not applied", scan.scope.unsupportedFilters)
                     }
                     if !scan.scope.limitations.isEmpty {
                         scopeLines("Coverage limits", scan.scope.limitations)
