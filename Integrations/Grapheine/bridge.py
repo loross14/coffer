@@ -734,12 +734,28 @@ def apply(authority, root, policy, packet_path, receipt_path):
     return {**result, "message": "All existing Grapheine gates passed; signed settlement committed."}
 
 
+def graph_snapshot(graph, root):
+    import tempfile
+    helper_path = Path(__file__).resolve().with_name("graph_adapter.py")
+    namespace = {"__name__": "planisphere_graph_adapter"}
+    exec(compile(read_regular(helper_path), str(helper_path), "exec"), namespace)
+    with tempfile.TemporaryDirectory(prefix=".planisphere-graph-") as temporary:
+        stage = Path(temporary).resolve()
+        before = discovery_inventory(root, graph, destination=stage)
+        texts = {name: (stage / name).read_bytes().decode("utf-8") for name in before["files"]}
+        result = namespace["build_graph"](texts, str(root))
+        if discovery_inventory(root, graph) != before:
+            raise BridgeError("Vault or exclusions changed while loading the graph. Refresh the graph.")
+    return {**result, "vaultPath": str(root), "scannedAt": datetime.now(timezone.utc).isoformat(),
+            "scope": before["scope"]}
+
+
 def main(argv=None):
     class JSONArgumentParser(argparse.ArgumentParser):
         def error(self, message):
             raise BridgeError(message)
     parser = JSONArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["scan", "prepare", "apply", "prepare-local", "verify-local"])
+    parser.add_argument("action", choices=["scan", "graph", "prepare", "apply", "prepare-local", "verify-local"])
     parser.add_argument("--engine-root", required=True)
     parser.add_argument("--vault", required=True)
     parser.add_argument("--policy")
@@ -758,6 +774,10 @@ def main(argv=None):
             graph, authority = load_engine(args.engine_root)
             if args.action == "scan":
                 result = scan(graph, authority, root, args.policy)
+            elif args.action == "graph":
+                if args.policy:
+                    raise BridgeError("Graph discovery does not use an authority policy.")
+                result = graph_snapshot(graph, root)
             elif args.action in ("prepare-local", "verify-local"):
                 if args.policy:
                     raise BridgeError("A configured signed policy cannot be bypassed by a local review request.")

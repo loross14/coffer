@@ -16,6 +16,8 @@ By default the build targets the host architecture and is ad-hoc signed for loca
 
 ## Public distribution
 
+Graph releases also require `python3 -B scripts/test_graph_adapter.py`, the Swift graph/service tests, and native graph acceptance on a disposable large vault. Verify stable idle behavior, exact-path selection, dragging and pinning, cursor-centered zoom, bounded canvas drawing, refresh after edits, cancellation while switching vaults, and unchanged source bytes. See [GRAPH.md](GRAPH.md) for scope and layout semantics.
+
 When a valid Developer ID Application identity is available, set `PLANISPHERE_SIGN_IDENTITY` to that identity before packaging. The script adds a secure timestamp for that signing mode. Verify the chosen deployment target and supported architectures, then submit the ZIP with the owner's configured notarytool credentials and wait for a successful result. Staple the accepted ticket to the app, verify Gatekeeper assessment, recreate/checksum the distributable ZIP, and test a clean-machine download and launch. Do not describe an ad-hoc build as notarized, or treat a queued notarization submission as success.
 
 Local history is separate from the working vault, but is still on this Mac. Device-loss backup requires a separate copy; the managed reference library does not provide a hosted backup service. Restore in this first build produces a new registered recovered copy and retains original work. Full in-place rollback is intentionally absent until arbitrary-editor coordination can be established.

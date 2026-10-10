@@ -247,7 +247,7 @@ struct VaultWorkspaceView: View {
                         Text(surface.rawValue).tag(surface)
                     }
                 }
-                .pickerStyle(.segmented).labelsHidden().frame(width: 230)
+                .pickerStyle(.segmented).labelsHidden().frame(width: 300)
                 .disabled(model.isBusy)
                 .accessibilityIdentifier("vault-surface")
 
@@ -274,7 +274,11 @@ struct VaultWorkspaceView: View {
             .padding(24)
             .fixedSize(horizontal: false, vertical: true)
             Divider()
-            if model.selectedSurface == .pruning {
+            if model.selectedSurface == .graph {
+                VaultGraphView(vault: vault)
+                    .id(vault.id)
+                    .frame(minHeight: 0, maxHeight: .infinity)
+            } else if model.selectedSurface == .pruning {
                 PruningView(model: model)
                     .frame(minHeight: 0, maxHeight: .infinity)
             } else if let historyError = model.historyReadError {

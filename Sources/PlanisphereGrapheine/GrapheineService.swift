@@ -29,6 +29,69 @@ public actor GrapheineService {
         return try Self.validatedScan(data, vaultURL: vaultURL)
     }
 
+    public func graph(vaultURL: URL) async throws -> GraphSnapshot {
+        let data = try await invoke("graph", vaultURL: vaultURL, policyURL: nil)
+        return try Self.validatedGraph(data, vaultURL: vaultURL)
+    }
+
+    internal nonisolated static func validatedGraph(_ data: Data, vaultURL: URL) throws -> GraphSnapshot {
+        guard data.count <= 32 * 1024 * 1024 else {
+            throw GrapheineError.invalidResponse("The graph report exceeds the supported size.")
+        }
+        let graph = try JSONDecoder().decode(GraphSnapshot.self, from: data)
+        guard graph.vaultPath == vaultURL.path, !graph.scannedAt.isEmpty, graph.scannedAt.count <= 100,
+              graph.nodes.count <= 10_000, graph.edges.count <= 100_000,
+              graph.totalNodeCount >= graph.nodes.count, graph.totalNodeCount <= 20_000,
+              graph.totalEdgeCount >= graph.edges.count, graph.totalEdgeCount <= 1_000_000,
+              graph.omittedNodeCount == graph.totalNodeCount - graph.nodes.count,
+              graph.omittedEdgeCount == graph.totalEdgeCount - graph.edges.count,
+              [graph.unresolvedLinkCount, graph.ambiguousLinkCount, graph.unsupportedLinkCount]
+                .allSatisfy({ (0...1_000_000).contains($0) }),
+              graph.limits.count <= 100, graph.limits.allSatisfy({ $0.utf8.count <= 4_096 }) else {
+            throw GrapheineError.invalidResponse("The graph report has incomplete counts or belongs to another vault.")
+        }
+        try validateScope(graph.scope)
+        let ids = Set(graph.nodes.map(\.id))
+        guard ids.count == graph.nodes.count, Set(graph.edges).count == graph.edges.count else {
+            throw GrapheineError.invalidResponse("The graph report contains duplicate notes or connections.")
+        }
+        var incoming: [String: Int] = [:], outgoing: [String: Int] = [:]
+        for edge in graph.edges {
+            guard ids.contains(edge.source), ids.contains(edge.target) else {
+                throw GrapheineError.invalidResponse("A graph connection points outside the returned notes.")
+            }
+            incoming[edge.target, default: 0] += 1
+            outgoing[edge.source, default: 0] += 1
+        }
+        for node in graph.nodes {
+            try validateRelativePath(node.id)
+            let components = node.id.split(separator: "/").map(String.init)
+            let basename = components.last ?? ""
+            let folder = components.dropLast().joined(separator: "/")
+            guard node.id.utf8.count <= 4_096, node.id.hasSuffix(".md"), node.title == String(basename.dropLast(3)),
+                  node.folder == folder, node.inDegree == incoming[node.id, default: 0],
+                  node.outDegree == outgoing[node.id, default: 0],
+                  node.degree == node.inDegree + node.outDegree else {
+                throw GrapheineError.invalidResponse("A graph note has an unsafe path or inconsistent connection counts.")
+            }
+        }
+        return graph
+    }
+
+    private nonisolated static func validateScope(_ scope: PruningScanScope) throws {
+        guard scope.kind == "markdown-discovery", scope.excludedCount >= scope.excludedPaths.count,
+              scope.excludedPaths.count <= 100, scope.appliedFilters.count <= 100,
+              scope.unsupportedFilters.count <= 100, scope.limitations.count <= 100,
+              scope.truncated == (scope.excludedCount > scope.excludedPaths.count),
+              (scope.excludedPaths + scope.appliedFilters + scope.unsupportedFilters + scope.limitations)
+                .allSatisfy({ $0.utf8.count <= 8_192 }) else {
+            throw GrapheineError.invalidResponse("Grapheine returned incomplete or unsupported scan coverage. Scan again with the current engine.")
+        }
+        for path in scope.excludedPaths {
+            try validateRelativePath(path.hasSuffix("/") ? String(path.dropLast()) : path)
+        }
+    }
+
     internal nonisolated static func validatedScan(_ data: Data, vaultURL: URL) throws -> PruningScan {
         let scan = try JSONDecoder().decode(PruningScan.self, from: data)
         guard scan.vaultPath == vaultURL.path, scan.notes >= 0, scan.totalGroups >= scan.groups.count,
@@ -39,16 +102,7 @@ public actor GrapheineService {
               scan.authority.status == "available" || scan.authority.questions.isEmpty else {
             throw GrapheineError.invalidResponse("Grapheine returned a report for another folder or an incomplete count.")
         }
-        let scope = scan.scope
-        guard scope.kind == "markdown-discovery", scope.excludedCount >= scope.excludedPaths.count,
-              scope.excludedPaths.count <= 100, scope.appliedFilters.count <= 100,
-              scope.unsupportedFilters.count <= 100, scope.limitations.count <= 100,
-              scope.truncated == (scope.excludedCount > scope.excludedPaths.count) else {
-            throw GrapheineError.invalidResponse("Grapheine returned incomplete or unsupported scan coverage. Scan again with the current engine.")
-        }
-        for path in scope.excludedPaths {
-            try Self.validateRelativePath(path.hasSuffix("/") ? String(path.dropLast()) : path)
-        }
+        try validateScope(scan.scope)
         for group in scan.groups {
             guard group.members.count <= 1_000, group.declaredCopies >= 0 else {
                 throw GrapheineError.invalidResponse("Grapheine returned an incomplete candidate group.")
@@ -168,9 +222,16 @@ public actor GrapheineService {
         var args = [helper.path, action, "--engine-root", engine.path, "--vault", vaultURL.path]
         if let policyURL { args += ["--policy", policyURL.path] }
         args += arguments
-        return try await Task.detached(priority: .userInitiated) {
+        let worker = Task.detached(priority: .userInitiated) {
             try Self.run(python: python, helper: helper, engine: engine, arguments: args, applying: action == "apply")
-        }.value
+        }
+        // A cancelled view must stop its read worker, not just discard its result.
+        // Applying is deliberately allowed to finish so a write is not interrupted.
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            if action != "apply" { worker.cancel() }
+        }
     }
 
     private nonisolated static func temporaryDirectory() throws -> URL {
@@ -187,6 +248,7 @@ public actor GrapheineService {
     }
 
     private nonisolated static func run(python: URL, helper: URL, engine: URL, arguments: [String], applying: Bool) throws -> Data {
+        if !applying { try Task.checkCancellation() }
         guard FileManager.default.isExecutableFile(atPath: python.path), FileManager.default.fileExists(atPath: helper.path),
               FileManager.default.fileExists(atPath: engine.appendingPathComponent("grapheine_authority.py").path) else {
             throw GrapheineError.unavailable("Grapheine is unavailable. This build needs its bundled engine and Python 3.9 or later. Your vault has not changed.")
@@ -208,6 +270,9 @@ public actor GrapheineService {
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         environment["PYTHONIOENCODING"] = "utf-8"
         environment["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
+        // Python's admitted-note staging stays under our private directory, so
+        // cancellation removes staged note bytes even if Python is terminated.
+        environment["TMPDIR"] = directory.path
         process.environment = environment
         process.currentDirectoryURL = directory
         process.standardInput = FileHandle.nullDevice
@@ -219,7 +284,7 @@ public actor GrapheineService {
         var interrupted = false
         while process.isRunning {
             let size = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            if !applying && (Date() > deadline || size > 64 * 1024 * 1024) {
+            if !applying && (Task.isCancelled || Date() > deadline || size > 64 * 1024 * 1024) {
                 interrupted = true
                 process.terminate()
                 // Do not block the UI indefinitely if a subprocess cannot exit.
@@ -230,6 +295,7 @@ public actor GrapheineService {
             Thread.sleep(forTimeInterval: 0.05)
         }
         process.waitUntilExit()
+        if !applying { try Task.checkCancellation() }
         if interrupted {
             throw GrapheineError.unavailable(applying
                 ? "Pruning did not return a completion result. The recovery checkpoint is retained. Inspect the vault and local Git history before retrying."

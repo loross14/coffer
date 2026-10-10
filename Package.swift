@@ -12,8 +12,10 @@ let package = Package(
     targets: [
         .target(name: "PlanisphereCore"),
         .target(name: "PlanisphereGrapheine"),
+        .target(name: "PlanisphereGraph"),
         .target(name: "PlanisphereManaged", dependencies: ["PlanisphereCore"]),
-        .executableTarget(name: "PlanisphereApp", dependencies: ["PlanisphereCore", "PlanisphereGrapheine"]),
+        .executableTarget(name: "PlanisphereApp", dependencies: ["PlanisphereCore", "PlanisphereGrapheine", "PlanisphereGraph"]),
+        .testTarget(name: "PlanisphereGraphTests", dependencies: ["PlanisphereGraph"]),
         .testTarget(name: "PlanisphereGrapheineTests", dependencies: ["PlanisphereGrapheine"]),
         .testTarget(name: "PlanisphereCoreTests", dependencies: ["PlanisphereCore"]),
         .testTarget(name: "PlanisphereManagedTests", dependencies: ["PlanisphereManaged", "PlanisphereCore"])

@@ -1,6 +1,6 @@
 # Planisphere for Mac
 
-Local vault management and version history. Add a folder, make a checkpoint, inspect what changed, restore a recovered copy, and export the vault with its retained history. No GitHub account or managed-storage subscription is needed.
+Local vault management, version history, and an interactive graph. Add a folder, explore its connections, make a checkpoint, inspect what changed, restore a recovered copy, and export the vault with its retained history. No GitHub account or managed-storage subscription is needed.
 
 Planisphere descends from the Coffer prototype. The original `Coffer/` and Xcode project remain as historical source; **the current app is built from `Sources/PlanisphereApp` and `Sources/PlanisphereCore` through `Package.swift`**. It does not invoke Coffer's in-place encryption or migrate Coffer keys/configuration.
 
@@ -25,6 +25,14 @@ Vault folders remain ordinary files. Planisphere stores its registry and content
 Restoring creates a **new recovered folder**, leaving current work untouched. Export produces the latest saved checkpoint as ordinary vault files plus inspectable retained history. Edits made after that checkpoint are not included; create another checkpoint first to include them. Saved history can be exported even if the working folder is unavailable. Checkpoints on the same device are not an independent backup; keep a separate backup appropriate for the data.
 
 For isolated development/UI testing, `PLANISPHERE_DATA_DIR` selects a separate history root and `PLANISPHERE_DEMO_VAULT` explicitly selects a disposable fixture to register. The app never auto-imports actual user vaults.
+
+## Graph
+
+The **Graph** workspace reads the selected vault's Markdown links locally. Search by note name or path, select a note to read it, focus its neighborhood, and open it in your editor. Folder colors and initial placement make larger vaults easier to navigate. Drag a note to move it, pin it in place, drag the background to pan, and scroll or pinch to zoom around the pointer.
+
+The native force simulation uses Barnes–Hut repulsion, degree-aware springs, collision separation and local reheating after a drag. It cools to rest and stops its timer; selecting a note does not disturb a settled layout. Pause and spacing controls are available, and Reduce Motion starts the graph paused. Fit changes the camera without resetting positions. Refresh re-reads the vault while preserving surviving note positions and pins for this view session.
+
+The graph is a snapshot, not a live editor or semantic similarity claim. It shows explicit resolved links, with ambiguous, missing, unsupported and omitted counts available under **Snapshot & scope**. No links or vault files are written. [Graph behavior, limits and validation](docs/GRAPH.md).
 
 ## Grapheine pruning
 

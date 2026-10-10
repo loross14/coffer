@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 
 enum VaultSurface: String, CaseIterable {
     case history = "History"
+    case graph = "Graph"
     case pruning = "Pruning"
 }
 
