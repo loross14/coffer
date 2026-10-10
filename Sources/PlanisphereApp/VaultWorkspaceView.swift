@@ -33,6 +33,16 @@ struct VaultWorkspaceView: View {
 
     private var workspace: some View {
             VStack(spacing: 0) {
+                if let warning = model.pruningRecoveryWarning {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
+                        Text(warning).font(.caption).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.horizontal, 22).padding(.vertical, 12)
+                    .background(Color.orange.opacity(0.08))
+                    .fixedSize(horizontal: false, vertical: true)
+                }
                 if let notice = model.notice { noticeBanner(notice).fixedSize(horizontal: false, vertical: true) }
                 if let vault = model.selectedVault {
                     vaultDetail(vault).frame(minHeight: 0, maxHeight: .infinity)
@@ -200,6 +210,16 @@ struct VaultWorkspaceView: View {
                 }
                 .disabled(model.isBusy)
 
+                Picker("Vault workspace", selection: $model.selectedSurface) {
+                    ForEach(VaultSurface.allCases, id: \.self) { surface in
+                        Text(surface.rawValue).tag(surface)
+                    }
+                }
+                .pickerStyle(.segmented).labelsHidden().frame(width: 230)
+                .disabled(model.isBusy)
+                .accessibilityIdentifier("vault-surface")
+
+                if model.selectedSurface == .history {
                 HStack(spacing: 12) {
                     Image(systemName: "bookmark").foregroundStyle(.secondary)
                     TextField("Checkpoint message (optional)", text: $model.checkpointMessage)
@@ -217,11 +237,15 @@ struct VaultWorkspaceView: View {
                 Text("Checkpoints are explicit. Edits since your last checkpoint are not yet in local history.")
                     .font(.caption).foregroundStyle(.secondary)
                     .padding(.top, -8)
+                }
             }
             .padding(24)
             .fixedSize(horizontal: false, vertical: true)
             Divider()
-            if let historyError = model.historyReadError {
+            if model.selectedSurface == .pruning {
+                PruningView(model: model)
+                    .frame(minHeight: 0, maxHeight: .infinity)
+            } else if let historyError = model.historyReadError {
                 unavailableHistory(historyError)
             } else if model.checkpoints.isEmpty {
                 emptyHistory

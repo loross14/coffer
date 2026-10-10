@@ -15,6 +15,9 @@ STAGING_APP="$STAGING_DIR/Planisphere.app"
 mkdir -p "$STAGING_APP/Contents/MacOS" "$STAGING_APP/Contents/Resources"
 cp "$BINARY_DIR/Planisphere" "$STAGING_APP/Contents/MacOS/Planisphere"
 cp Resources/Info.plist "$STAGING_APP/Contents/Info.plist"
+mkdir -p "$STAGING_APP/Contents/Resources/Grapheine"
+cp Integrations/Grapheine/bridge.py "$STAGING_APP/Contents/Resources/Grapheine/bridge.py"
+/usr/bin/python3 scripts/bundle-grapheine.py "${PLANISPHERE_GRAPHEINE_SOURCE:-$REPO_ROOT/../Grapheine}" "$STAGING_APP/Contents/Resources/Grapheine/engine"
 CLANG_MODULE_CACHE_PATH="$MODULE_CACHE" xcrun swift scripts/make-icon.swift "$STAGING_DIR/AppIcon.iconset"
 iconutil -c icns "$STAGING_DIR/AppIcon.iconset" -o "$STAGING_APP/Contents/Resources/AppIcon.icns"
 # Ad-hoc signing is for a locally runnable build. For external distribution provide a Developer ID identity and notarize.
@@ -30,6 +33,7 @@ if [ -e "$APP_PATH" ]; then
     mv "$APP_PATH" "$BACKUP_PATH"
 fi
 mv "$STAGING_APP" "$APP_PATH"
-ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$OUTPUT_DIR/Planisphere-0.1.0-mac.zip"
-shasum -a 256 "$OUTPUT_DIR/Planisphere-0.1.0-mac.zip" > "$OUTPUT_DIR/Planisphere-0.1.0-mac.zip.sha256"
+VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$OUTPUT_DIR/Planisphere-$VERSION-mac.zip"
+shasum -a 256 "$OUTPUT_DIR/Planisphere-$VERSION-mac.zip" > "$OUTPUT_DIR/Planisphere-$VERSION-mac.zip.sha256"
 printf 'Built %s\n' "$APP_PATH"
