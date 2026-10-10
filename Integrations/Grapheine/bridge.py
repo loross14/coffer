@@ -224,9 +224,10 @@ def authority_scan(authority, policy, root):
     try:
         with policy_environment(policy, root):
             ctx = context(authority, policy, root)
+            full_before = snapshot(root)
             before = control_pins(authority, ctx)
             report = authority.report(ctx)
-            if control_pins(authority, ctx) != before:
+            if snapshot(root) != full_before or control_pins(authority, ctx) != before:
                 raise BridgeError("Authority inputs changed during review. Scan again.")
             questions = []
             for item in report["resolved_graph"] + report["residual_graph"]:
@@ -246,20 +247,301 @@ def authority_scan(authority, policy, root):
         return {"status": "unavailable", "message": str(exc), "questions": []}
 
 
-def scan(graph, authority, root, policy=None):
-    before = snapshot(root)
+# Discovery deliberately has a smaller read scope than strict write readiness.
+MAX_NOTE_BYTES = 8 * 1024 * 1024
+MAX_DISCOVERY_BYTES = 256 * 1024 * 1024
+MAX_DISCOVERY_NOTES = 20_000
+MAX_SCOPE_ITEMS = 100
+DISCOVERY_LIMITATIONS = [
+    "Discovery covers included Markdown only. Its fingerprint does not verify whole-vault write eligibility or authorize pruning.",
+    "Hidden directories, engine dependency directories, non-Markdown files, symbolic links and special entries are excluded. A listed folder represents its entire subtree.",
+    "Obsidian userIgnoreFilters supports literal root-relative folder and file paths with exact spelling. Regex, glob, absolute, traversal and non-string filters are reported unsupported; full Obsidian filter semantics are not implemented.",
+    "Graph links and canonical-owner paths resolve only to included notes. Absolute paths inside the original vault are mapped to included copies; external or excluded targets are omitted. Note bytes are not rewritten.",
+    "Optional authority review and write preparation retain strict whole-vault checks, independently of discovery exclusions.",
+]
+
+
+def discovery_config(root):
+    """Read only the specific exclusion configuration, never follow its links."""
+    rootfd = os.open(str(root), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    configfd = None
+    try:
+        try:
+            info = os.stat(".obsidian", dir_fd=rootfd, follow_symlinks=False)
+        except FileNotFoundError:
+            return {"identity": "absent", "applied": [], "unsupported": []}
+        if not stat.S_ISDIR(info.st_mode):
+            raise BridgeError("Obsidian exclusion settings are unavailable: .obsidian is not a regular directory.")
+        configfd = os.open(".obsidian", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=rootfd)
+        try:
+            info = os.stat("app.json", dir_fd=configfd, follow_symlinks=False)
+        except FileNotFoundError:
+            return {"identity": "absent", "applied": [], "unsupported": []}
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 1024 * 1024:
+            raise BridgeError("Obsidian app.json must be a regular configuration file no larger than 1 MiB.")
+        descriptor = os.open("app.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=configfd)
+        try:
+            if stamp(info) != stamp(os.fstat(descriptor)):
+                raise BridgeError("Obsidian exclusion settings changed during reading. Scan again.")
+            chunks, total = [], 0
+            while True:
+                chunk = os.read(descriptor, 65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > 1024 * 1024:
+                    raise BridgeError("Obsidian app.json exceeds the 1 MiB configuration limit.")
+                chunks.append(chunk)
+            if stamp(info) != stamp(os.fstat(descriptor)):
+                raise BridgeError("Obsidian exclusion settings changed during reading. Scan again.")
+            raw = b"".join(chunks)
+        finally:
+            os.close(descriptor)
+    finally:
+        if configfd is not None:
+            os.close(configfd)
+        os.close(rootfd)
+    try:
+        document = json.loads(raw.decode("utf-8"))
+        filters = document.get("userIgnoreFilters", [])
+        if not isinstance(filters, list) or len(filters) > 10_000:
+            raise ValueError("userIgnoreFilters must be a list with at most 10,000 entries")
+    except (UnicodeError, ValueError, AttributeError) as exc:
+        raise BridgeError("Obsidian exclusion settings could not be read safely: " + str(exc)) from exc
+    applied, unsupported = [], []
+    for rule in filters:
+        if (not isinstance(rule, str) or not rule or len(rule) > 4096
+                or rule.startswith(("/", "~")) or any(c in rule for c in "\\*?[]{}()|^$\0\r\n")
+                or any(part in ("", ".", "..") for part in rule.rstrip("/").split("/"))):
+            label = rule if isinstance(rule, str) and rule else json.dumps(rule, ensure_ascii=False)
+            unsupported.append(label[:4096])
+        else:
+            applied.append(rule)
+    return {"identity": hashlib.sha256(raw).hexdigest(),
+            "applied": sorted(set(applied)), "unsupported": sorted(set(unsupported))}
+
+
+def discovery_inventory(root, graph, destination=None):
+    root = safe_path(root, directory=True)
+    config = discovery_config(root)
+    excluded, excluded_count, excluded_digest = [], 0, hashlib.sha256()
+    files, stamps, directory_ids = {}, {}, {}
+    total_bytes, visited = 0, 0
+    exact_rules = {rule.rstrip("/") for rule in config["applied"]}
+
+    def exclude(path, reason, directory=False):
+        nonlocal excluded_count
+        label = path + "/" if directory else path
+        excluded_count += 1
+        excluded_digest.update(canonical([label, reason]) + b"\n")
+        if len(excluded) < MAX_SCOPE_ITEMS:
+            excluded.append(label)
+
+    def visit(fd, prefix, depth):
+        nonlocal total_bytes, visited
+        if depth > 128:
+            raise BridgeError("Discovery folder nesting exceeds the 128-level limit.")
+        folder_info = os.fstat(fd)
+        directory_ids[prefix] = (folder_info.st_dev, folder_info.st_ino)
+        for name in sorted(os.listdir(fd)):
+            name.encode("utf-8", errors="strict")
+            relative = prefix + "/" + name if prefix else name
+            visited += 1
+            if visited > MAX_FILES:
+                raise BridgeError("Discovery exceeds 250,000 visited entries. Add explicit folder exclusions and scan again.")
+            try:
+                info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            except PermissionError:
+                exclude(relative, "unreadable entry")
+                continue
+            except FileNotFoundError as exc:
+                raise BridgeError("Vault changed while scanning. Scan again.") from exc
+            is_directory = stat.S_ISDIR(info.st_mode)
+            if relative in exact_rules:
+                exclude(relative, "Obsidian exclusion", is_directory)
+                continue
+            if is_directory and (name.startswith(".") or name in graph.SKIP_DIRS):
+                exclude(relative, "hidden or engine directory", True)
+                continue
+            if not (is_directory or stat.S_ISREG(info.st_mode)):
+                exclude(relative, "symbolic link or special entry")
+                continue
+            if is_directory:
+                try:
+                    child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                except PermissionError:
+                    exclude(relative, "unreadable directory", True)
+                    continue
+                try:
+                    if stamp(info) != stamp(os.fstat(child)):
+                        raise BridgeError("Vault changed while scanning. Scan again.")
+                    visit(child, relative, depth + 1)
+                finally:
+                    os.close(child)
+            elif not name.endswith(".md"):
+                exclude(relative, "non-Markdown file")
+            else:
+                if info.st_size > MAX_NOTE_BYTES:
+                    raise BridgeError("Included Markdown exceeds the 8 MiB per-note discovery limit: " + relative)
+                if len(files) >= MAX_DISCOVERY_NOTES or total_bytes + info.st_size > MAX_DISCOVERY_BYTES:
+                    raise BridgeError("Discovery exceeds 20,000 notes or 256 MiB of included Markdown. Add explicit folder exclusions.")
+                try:
+                    child = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                except PermissionError:
+                    exclude(relative, "unreadable Markdown")
+                    continue
+                output = None
+                try:
+                    if stamp(info) != stamp(os.fstat(child)):
+                        raise BridgeError("Vault changed while scanning. Scan again.")
+                    if destination is not None:
+                        target = destination / relative
+                        target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                        output = os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                    hasher, count = hashlib.sha256(), 0
+                    decoder = codecs.getincrementaldecoder("utf-8")("strict")
+                    try:
+                        while True:
+                            chunk = os.read(child, 1024 * 1024)
+                            if not chunk:
+                                break
+                            count += len(chunk)
+                            if count > MAX_NOTE_BYTES or total_bytes + count > MAX_DISCOVERY_BYTES:
+                                raise BridgeError("Included Markdown grew beyond discovery limits. Scan again.")
+                            decoder.decode(chunk, final=False)
+                            hasher.update(chunk)
+                            if output is not None:
+                                view = memoryview(chunk)
+                                while view:
+                                    written = os.write(output, view)
+                                    if written <= 0:
+                                        raise BridgeError("Could not prepare the private discovery copy.")
+                                    view = view[written:]
+                        decoder.decode(b"", final=True)
+                    except UnicodeDecodeError as exc:
+                        raise BridgeError("Included Markdown must use valid UTF-8: " + relative) from exc
+                    if stamp(info) != stamp(os.fstat(child)) or count != info.st_size:
+                        raise BridgeError("Vault changed while scanning. Scan again.")
+                    files[relative], stamps[relative] = hasher.hexdigest(), stamp(info)
+                    total_bytes += count
+                finally:
+                    if output is not None:
+                        os.close(output)
+                    os.close(child)
+
+    descriptor = os.open(str(root), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        visit(descriptor, "", 0)
+    finally:
+        os.close(descriptor)
+    limitations = list(DISCOVERY_LIMITATIONS)
+    if len(config["applied"]) > MAX_SCOPE_ITEMS:
+        limitations.append("All supported filters were applied; only the first 100 are listed.")
+    if len(config["unsupported"]) > MAX_SCOPE_ITEMS:
+        limitations.append("Only the first 100 unsupported filters are listed; none were applied.")
+    scope = {"kind": "markdown-discovery", "excludedPaths": excluded,
+             "excludedCount": excluded_count, "truncated": excluded_count > len(excluded),
+             "appliedFilters": config["applied"][:MAX_SCOPE_ITEMS],
+             "unsupportedFilters": config["unsupported"][:MAX_SCOPE_ITEMS], "limitations": limitations}
+    return {"files": files, "stamps": stamps, "directories": directory_ids,
+            "config": config, "scope": scope, "excludedIdentity": excluded_digest.hexdigest()}
+
+
+@contextlib.contextmanager
+def scoped_graph(graph, root, stage, included):
+    """Restrict filesystem-based engine reads/resolution to the admitted copies.
+
+    The engine's graph algorithms and nomination rules are reused unchanged.
+    Its path-based link resolution is narrowed to verified inventory membership.
+    """
+    from collections import defaultdict
+    originals = {name: getattr(graph, name) for name in ("read_note", "collect_links", "_canonical_status")}
+    admitted = {stage / relative for relative in included}
+    links_cache = None
+
+    def target(source, raw):
+        candidate = Path(os.path.normpath(str(Path(raw) if Path(raw).is_absolute() else source.parent / raw)))
+        for base in (stage, root):
+            try:
+                relative = candidate.relative_to(base).as_posix()
+            except ValueError:
+                continue
+            if relative in included:
+                return stage / relative
+        return None
+
+    def read_note(path):
+        if Path(path) not in admitted:
+            raise BridgeError("Engine attempted to read outside the verified discovery scope.")
+        return originals["read_note"](path)
+
+    def canonical_status(path, raw):
+        found = target(path, str(raw))
+        return ("resolved", str(found)) if found is not None else ("outside-discovery-scope", "")
+
+    def collect_links(vaults):
+        nonlocal links_cache
+        if links_cache is not None:
+            return links_cache
+        if graph._as_list(vaults) != [stage]:
+            raise BridgeError("Engine requested a different discovery root.")
+        index = graph.vault_index([stage])
+        forward, reverse, unresolved = defaultdict(list), defaultdict(set), defaultdict(set)
+        files = sorted(admitted, key=str)
+        for source in files:
+            body, _ = read_note(source)
+            body, seen = graph.strip_code(body), set()
+            for match in graph.WIKILINK_RE.finditer(body):
+                stem = match.group(1).strip().lower()
+                if not stem or stem in seen:
+                    continue
+                seen.add(stem)
+                candidates = index.get(stem)
+                if candidates:
+                    found = next((item for item in candidates if item.parent == source.parent), None) or candidates[0]
+                    if found != source:
+                        forward[source].append(found)
+                        reverse[found].add(source)
+                else:
+                    unresolved[stem].add(source)
+            for match in graph.MDLINK_RE.finditer(body):
+                found = target(source, match.group(2).strip())
+                if found is not None and found != source and found.stem.lower() not in seen:
+                    seen.add(found.stem.lower())
+                    forward[source].append(found)
+                    reverse[found].add(source)
+        links_cache = forward, reverse, unresolved, files, index
+        return links_cache
+
     graph._index_cache.clear()
     graph._links_cache.clear()
-    accounts = graph._accounts_payload([root], top=MAX_GROUPS, include_generic=False)
-    diagnostics = [accounts["claims_boundary"]]
+    graph.read_note, graph.collect_links, graph._canonical_status = read_note, collect_links, canonical_status
     try:
-        doctor = graph._obstruction_payload([root], 5, 300)
-        diagnostics.extend(graph._doctor_actions(doctor))
-    except Exception as exc:
-        diagnostics.append("Graph diagnostics unavailable: " + str(exc))
-    auth = authority_scan(authority, policy, root)
-    if snapshot(root) != before:
-        raise BridgeError("Vault changed while scanning. No current scan was published; scan again.")
+        yield
+    finally:
+        for name, function in originals.items():
+            setattr(graph, name, function)
+        graph._index_cache.clear()
+        graph._links_cache.clear()
+
+
+def scan(graph, authority, root, policy=None):
+    import tempfile
+    root = safe_path(root, directory=True)
+    with tempfile.TemporaryDirectory(prefix=".planisphere-discovery-") as temporary:
+        stage = Path(temporary).resolve()
+        before = discovery_inventory(root, graph, destination=stage)
+        with scoped_graph(graph, root, stage, before["files"]):
+            accounts = graph._accounts_payload([stage], top=MAX_GROUPS, include_generic=False)
+            diagnostics = [accounts["claims_boundary"]]
+            try:
+                doctor = graph._obstruction_payload([stage], 5, 300)
+                diagnostics.extend(graph._doctor_actions(doctor))
+            except Exception as exc:
+                diagnostics.append("Graph diagnostics unavailable: " + str(exc))
+        auth = authority_scan(authority, policy, root)
+        if discovery_inventory(root, graph) != before:
+            raise BridgeError("Vault or discovery scope changed while scanning. No current scan was published; scan again.")
     groups = []
     for group in accounts["candidate_groups"]:
         members = group["members"]
@@ -269,12 +551,15 @@ def scan(graph, authority, root, policy=None):
                        "members": members[:1000], "declaredCopies": group["declared_copies"]})
     if accounts["candidate_group_count"] > MAX_GROUPS:
         diagnostics.append("Showing the first 200 candidate groups; additional groups exist.")
-    diagnostics.append("Graph diagnostics cover Markdown outside hidden/generated folders. Freshness also checks hidden configuration and attachments. Matches and structural signals are not permission to delete or merge notes.")
+    diagnostics.append("Discovery freshness covers included Markdown and exclusions, not attachment contents or whole-vault write readiness.")
+    if before["config"]["unsupported"]:
+        diagnostics.append("Some Obsidian exclusion filters are unsupported and were not applied; review the listed scope limitations.")
     return {"engineVersion": graph.__version__, "scannedAt": datetime.now(timezone.utc).isoformat(),
             "vaultPath": str(root), "notes": accounts["notes"],
             "totalGroups": accounts["candidate_group_count"], "groups": groups,
-            "diagnostics": diagnostics, "authority": auth,
-            "fingerprint": digest(before["files"])}
+            "diagnostics": diagnostics, "authority": auth, "scope": before["scope"],
+            "fingerprint": digest({"files": before["files"], "config": before["config"],
+                                   "scope": before["scope"], "excludedIdentity": before["excludedIdentity"]})}
 
 
 # Keep code examples byte-exact. The current engine's settlement parser can

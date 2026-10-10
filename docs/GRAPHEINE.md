@@ -1,4 +1,4 @@
-# Grapheine integration, 0.2.0
+# Grapheine integration, 0.3.0
 
 Planisphere for Mac is a local adapter to Grapheine's existing reviewed pruning workflow. It makes no network calls. Managed storage and the hosted console are separate optional surfaces.
 
@@ -15,7 +15,9 @@ The underlying contract requires a clean Git vault. No remote or GitHub storage 
 ## Boundaries and recovery
 
 - Before apply, close editing and sync writers. Grapheine's locks coordinate itself and Git, not arbitrary editors. Multi-file application cannot be atomic against a noncooperating editor. A crash can leave partial working changes and stale locks; inspect the local Git receipt and use the saved pre-operation checkpoint to restore a new folder.
-- A scan takes inventories before/after and refuses a changed input. It preflights paths, symlinks, regular files and note decoding before calling Grapheine. Structural guidance is advisory, including preservation of chronology and proof chains.
+- Discovery inventories included Markdown before/after and refuses changed included notes or scope. It skips hidden/dependency folders, non-Markdown files, symbolic links and special entries, and applies supported literal Obsidian `userIgnoreFilters` paths. Excluded locations and unsupported filters are visible in Pruning. The graph runs on a private, disposable copy of verified Markdown; links resolve only to included notes. The scan fingerprint covers discovery content and scope, not attachment bytes or whole-folder write eligibility. Structural guidance is advisory, including preservation of chronology and proof chains.
+- Discovery is bounded to 20,000 notes, 256 MiB of text, 8 MiB per note, 250,000 visited entries and 128 folder levels. The report lists up to 100 excluded locations and 200 candidate groups, with total counts and truncation disclosed. A listed excluded directory represents its entire subtree. No excluded target is followed to assess its contents.
+- Optional authority review, preparation and application retain strict whole-vault inventories. They still refuse symbolic links and special files and retain full attachment/configuration freshness checks. A candidate scan can succeed while authority review is unavailable. Native checkpoint support for links does not change Grapheine's write contract.
 - Every process receives one explicit selected vault; no default or multi-vault registry resolution is used. The selected policy must bind that same root. New scan, policy, question or vault selection invalidates prepared changes and any loaded permission.
 - The adapter additionally holds operations that would rewrite code examples. The pinned toolkit's link parser does not distinguish every literal code example from a live link; the native integration must not silently alter those examples.
 - An apply failure does not imply that nothing changed. Keep the recovery checkpoint and inspect any completed commit named by Grapheine. If application succeeded but the second checkpoint or UI refresh failed, the app preserves the success result and explains the follow-up failure.
@@ -40,3 +42,7 @@ The process adapter uses argument arrays, fresh processes, private temporary out
 - The main app was reopened on 0.2.0. A read-only Mythology-Graph scan returned 260 Markdown notes and no matching-account groups. Its existing 265-file checkpoint remained available. No live-vault prune or trust provisioning was performed.
 
 Remaining distribution/workflow limits: ad-hoc signing, external Python runtime, and Git-only signed settlement. Ordinary non-Git vaults currently have discovery/review only. Neither this acceptance nor the presence of context policy instructions establishes an enforceable security boundary.
+
+## October 10 mixed-vault regression
+
+The 0.2.0 scan incorrectly required a strict full-folder write inventory before read-only discovery. A hidden development checkout's symbolic link stopped discovery, even though the graph would skip that directory. The 0.3.0 discovery scope separates those checks without changing signed writes. Twenty-five Python bridge cases passed, including external-link non-reading, no binary hashing, exclusions, changed scope, and continued strict authority/write refusal. A direct read-only scan of `planisphere-build` completed in 0.94 seconds with 973 included notes, 59 candidate groups, and 14,646 excluded locations. These counts describe the inspected source state, not a permanent corpus total.

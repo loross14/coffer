@@ -163,8 +163,8 @@ final class VaultStoreTests: XCTestCase, @unchecked Sendable {
     }
 
     private struct Envelope<T: Codable>: Codable { let payload: T; let sha256: String }
-    private func replaceManifest(_ cp: Checkpoint, at url: URL, entries: [FileEntry]) throws {
-        let replacement = Checkpoint(id: cp.id, vaultID: cp.vaultID, parentID: cp.parentID, createdAt: cp.createdAt, message: cp.message, entries: entries)
+    private func replaceManifest(_ cp: Checkpoint, at url: URL, entries: [FileEntry], formatVersion: Int? = nil) throws {
+        let replacement = Checkpoint(formatVersion: formatVersion ?? cp.formatVersion, id: cp.id, vaultID: cp.vaultID, parentID: cp.parentID, createdAt: cp.createdAt, message: cp.message, entries: entries, captureScope: cp.captureScope)
         let envelope = Envelope(payload: replacement, sha256: VaultFS.hash(try VaultFormat.encode(replacement)))
         try VaultFormat.encode(envelope).write(to: url)
     }
@@ -187,7 +187,7 @@ final class VaultStoreTests: XCTestCase, @unchecked Sendable {
         }
     }
 
-    func testSourceAndDestinationSymlinksAndSpecialFilesAreRejected() async throws {
+    func testSourceAndDestinationSymlinkAncestorsAndSpecialFilesAreRejected() async throws {
         let f = try Fixture(); defer { f.clean() }
         try f.write("note.md", "original")
         let alias = f.base.appendingPathComponent("Alias")
@@ -197,7 +197,9 @@ final class VaultStoreTests: XCTestCase, @unchecked Sendable {
         let cp = try await f.store.createCheckpoint(vaultID: v.id, message: "Safe")
         let linkedFile = f.source.appendingPathComponent("link")
         try FileManager.default.createSymbolicLink(at: linkedFile, withDestinationURL: f.base)
-        await assertFailure { try await f.store.createCheckpoint(vaultID: v.id, message: "Unsafe link") }
+        let withLink = try await f.store.createCheckpoint(vaultID: v.id, message: "Link reference retained")
+        XCTAssertEqual(withLink.symbolicLinkCount, 1)
+        XCTAssertEqual(withLink.formatVersion, 2)
         try FileManager.default.removeItem(at: linkedFile)
         let fifo = f.source.appendingPathComponent("pipe")
         XCTAssertEqual(mkfifo(fifo.path, 0o600), 0)

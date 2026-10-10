@@ -71,7 +71,9 @@ struct PruningView: View {
             VStack(alignment: .leading, spacing: 14) {
                 if let scan = model.pruningScan {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text("\(scan.notes) notes scanned").font(.system(size: 12, weight: .semibold))
+                        Text("\(scan.notes) Markdown notes inspected").font(.system(size: 12, weight: .semibold))
+                        Text("\(scan.scope.excludedCount) locations excluded")
+                            .font(.caption2).foregroundStyle(.secondary)
                         Text("\(scan.groups.count) of \(scan.totalGroups) candidate groups shown")
                             .font(.caption2).foregroundStyle(.secondary)
                         Text("Scanned \(scanDate(scan.scannedAt))").font(.caption2).foregroundStyle(.secondary)
@@ -130,6 +132,12 @@ struct PruningView: View {
                 callout("Local recovery history unavailable", text: "Applying is held until history can be read. \(historyError)", symbol: "clock.badge.exclamationmark", color: .orange)
                 Button("Retry Reading History") { model.retryHistory() }.disabled(model.isBusy)
             }
+            if let scan = model.pruningScan {
+                scanCoverage(scan)
+                callout(authorityTitle(scan.authority.status),
+                    text: scan.authority.message ?? "Review each question and its holds before preparing changes.",
+                    symbol: "signature", color: scan.authority.status == "unavailable" ? .orange : .secondary)
+            }
             if let group = model.selectedPruningGroup {
                 groupDetail(group)
             } else if let question = model.selectedPruningQuestion {
@@ -159,9 +167,60 @@ struct PruningView: View {
             Text("Select a candidate to read its members, or an authority question to inspect its decision and holds.")
                 .font(.callout).foregroundStyle(.secondary).lineSpacing(4)
             workflowRequirements
-            if let scan = model.pruningScan {
-                callout(authorityTitle(scan.authority.status), text: scan.authority.message ?? "Review each question and its holds before preparing changes.", symbol: "signature", color: .secondary)
+        }
+    }
+
+    private func scanCoverage(_ scan: PruningScan) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Scan coverage", systemImage: "folder.badge.magnifyingglass").font(.headline)
+            Text("Candidate discovery inspected \(scan.notes) Markdown notes in this folder, using the exclusions below. This is not a full-vault safety check or permission to apply changes.")
+                .font(.caption).foregroundStyle(.secondary).lineSpacing(3)
+            if !scan.scope.unsupportedFilters.isEmpty {
+                Label("Some Obsidian exclusions could not be applied. Review the scope details.", systemImage: "exclamationmark.circle")
+                    .font(.caption).foregroundStyle(.orange)
             }
+            DisclosureGroup("\(scan.scope.excludedCount) excluded locations · scope details") {
+                VStack(alignment: .leading, spacing: 13) {
+                    Text("A listed folder includes its contents. Counts describe skipped locations, not the number of files inside those folders.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if scan.scope.excludedPaths.isEmpty {
+                        Text("No encountered locations were excluded.").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        scopeLines("Excluded paths", scan.scope.excludedPaths)
+                        if scan.scope.truncated {
+                            Text("Showing \(scan.scope.excludedPaths.count) of \(scan.scope.excludedCount) excluded locations.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    if !scan.scope.appliedFilters.isEmpty {
+                        scopeLines("Applied Obsidian exclusions", scan.scope.appliedFilters)
+                    }
+                    if !scan.scope.unsupportedFilters.isEmpty {
+                        scopeLines("Obsidian exclusions not applied", scan.scope.unsupportedFilters)
+                    }
+                    if !scan.scope.limitations.isEmpty {
+                        scopeLines("Coverage limits", scan.scope.limitations)
+                    }
+                    Text("Authority review and preparation check their own requirements against the full working vault. A discovery result or its fingerprint does not establish write eligibility.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(.top, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .font(.caption)
+        }
+        .padding(13).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 9))
+    }
+
+    private func scopeLines(_ title: String, _ lines: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.caption.weight(.semibold))
+            ScrollView {
+                Text(lines.joined(separator: "\n")).font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(height: min(180, CGFloat(max(1, lines.count)) * 19 + 8))
         }
     }
 

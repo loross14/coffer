@@ -7,6 +7,7 @@ import Darwin
 // security boundary against a process with the same user's unrestricted access.
 internal enum VaultFS {
     static let metadataLimit = 64 * 1024 * 1024
+    static let symbolicLinkLimit = 64 * 1024
     final class Handle {
         let fd: Int32
         init(_ fd: Int32) throws {
@@ -128,6 +129,39 @@ internal enum VaultFS {
         if fstatat(parent.fd, name, &result, AT_SYMLINK_NOFOLLOW) == 0 { return result }
         if errno == ENOENT { return nil }
         throw unavailable("Could not inspect a directory entry")
+    }
+
+    static func validateSymbolicLinkTarget(_ data: Data) throws {
+        guard !data.isEmpty, data.count <= symbolicLinkLimit, !data.contains(0) else {
+            throw VaultStoreError.corrupt("invalid symbolic-link target bytes")
+        }
+    }
+
+    /// Read the link entry itself. Never open or resolve its target.
+    static func readSymbolicLink(_ parent: Handle, _ name: String) throws -> Data {
+        guard let before = try entryInfo(parent, name), (before.st_mode & S_IFMT) == S_IFLNK else {
+            throw VaultStoreError.changedDuringCapture
+        }
+        var bytes = [UInt8](repeating: 0, count: symbolicLinkLimit + 1)
+        let count = bytes.withUnsafeMutableBytes { readlinkat(parent.fd, name, $0.baseAddress!, $0.count) }
+        guard count >= 0 else { throw unavailable("Could not read a symbolic link") }
+        let data = Data(bytes.prefix(count))
+        try validateSymbolicLinkTarget(data)
+        guard let after = try entryInfo(parent, name), Stamp(before) == Stamp(after) else {
+            throw VaultStoreError.changedDuringCapture
+        }
+        return data
+    }
+
+    /// Used only after regular entries have been materialized with no-follow parents.
+    static func createSymbolicLink(_ data: Data, parent: Handle, name: String) throws {
+        try validateSymbolicLinkTarget(data)
+        var terminated = Array(data)
+        terminated.append(0)
+        let result = terminated.withUnsafeBytes {
+            symlinkat($0.baseAddress!.assumingMemoryBound(to: CChar.self), parent.fd, name)
+        }
+        guard result == 0 else { throw unavailable("Could not restore a symbolic link") }
     }
 
     static func names(_ directory: Handle) throws -> [String] {

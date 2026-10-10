@@ -20,7 +20,7 @@ The [October 10 acceptance record](docs/ACCEPTANCE-2026-10-10.md) records the te
 
 ## What stays local
 
-Vault folders remain ordinary files. Planisphere stores its registry and content-addressed checkpoint history separately in `~/Library/Application Support/Planisphere`. Removing a vault from the list preserves its files and history. Re-adding the same folder recovers its identity/history. Explicit checkpoints capture included hidden files and attachments; they do not promise to record every edit. The app explains unsupported files instead of silently following links.
+Vault folders remain ordinary files. Planisphere stores its registry and content-addressed checkpoint history separately in `~/Library/Application Support/Planisphere`. Removing a vault from the list preserves its files and history. Re-adding the same folder recovers its identity/history. Create Checkpoint reviews **Vault Content** (using supported Obsidian exclusions, with included settings and attachments) or **Whole Folder**. The saved scope is shown in History. Symbolic links are preserved as references without following them; their target contents are not captured through the link. Explicit checkpoints do not promise to record every edit.
 
 Restoring creates a **new recovered folder**, leaving current work untouched. Export produces the latest saved checkpoint as ordinary vault files plus inspectable retained history. Edits made after that checkpoint are not included; create another checkpoint first to include them. Saved history can be exported even if the working folder is unavailable. Checkpoints on the same device are not an independent backup; keep a separate backup appropriate for the data.
 

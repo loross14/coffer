@@ -16,7 +16,84 @@ final class GrapheineServiceTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(scan.groups.count, 1)
         XCTAssertEqual(Set(scan.groups[0].members), Set(["Status.md", "Archive/Status.md"]))
         XCTAssertEqual(scan.authority.status, "notConfigured")
+        XCTAssertEqual(scan.scope.kind, "markdown-discovery")
         XCTAssertFalse(FileManager.default.fileExists(atPath: temporary.appendingPathComponent(".git").path))
+    }
+
+    func testScopedDiscoverySkipsExcludedFoldersAndSymlinksWithoutLosingIncludedNotes() async throws {
+        let fixture = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("planisphere-scoped-scan-" + UUID().uuidString)
+        let manager = FileManager.default
+        for path in ["Archive", "Ignored", "node_modules", ".hidden-checkout", ".obsidian"] {
+            try manager.createDirectory(at: fixture.appendingPathComponent(path), withIntermediateDirectories: true)
+        }
+        defer { try? manager.removeItem(at: fixture) }
+        for path in ["Status.md", "Archive/Status.md", "Ignored/Status.md", "node_modules/Status.md"] {
+            try Data("# \(path)\n".utf8).write(to: fixture.appendingPathComponent(path))
+        }
+        try JSONSerialization.data(withJSONObject: ["userIgnoreFilters": ["Ignored/"]])
+            .write(to: fixture.appendingPathComponent(".obsidian/app.json"))
+        try manager.createSymbolicLink(at: fixture.appendingPathComponent(".hidden-checkout/loop"), withDestinationURL: fixture)
+        try manager.createSymbolicLink(at: fixture.appendingPathComponent("linked.md"), withDestinationURL: fixture.appendingPathComponent("Status.md"))
+
+        let scan = try await GrapheineService().scan(vaultURL: fixture)
+        XCTAssertEqual(scan.notes, 2)
+        XCTAssertEqual(Set(try XCTUnwrap(scan.groups.first).members), Set(["Status.md", "Archive/Status.md"]))
+        XCTAssertTrue(Set(scan.scope.excludedPaths).isSuperset(of: ["Ignored/", "node_modules/", ".hidden-checkout/", "linked.md"]))
+        XCTAssertTrue(scan.scope.appliedFilters.contains("Ignored/"))
+        XCTAssertTrue(scan.scope.unsupportedFilters.isEmpty)
+        XCTAssertGreaterThanOrEqual(scan.scope.excludedCount, 4)
+        XCTAssertEqual(try String(contentsOf: fixture.appendingPathComponent("Ignored/Status.md"), encoding: .utf8), "# Ignored/Status.md\n")
+        XCTAssertFalse(manager.fileExists(atPath: fixture.appendingPathComponent(".git").path))
+    }
+
+    func testCoverageValidationRequiresBoundedCoherentScopeAndSafePaths() throws {
+        let vault = URL(fileURLWithPath: "/private/tmp/scoped-fixture")
+        var report = scanReport(vault: vault)
+        let valid = try GrapheineService.validatedScan(JSONSerialization.data(withJSONObject: report), vaultURL: vault)
+        XCTAssertEqual(valid.scope.excludedPaths, ["Ignored/"])
+
+        report.removeValue(forKey: "scope")
+        XCTAssertThrowsError(try GrapheineService.validatedScan(JSONSerialization.data(withJSONObject: report), vaultURL: vault))
+        for changes: [String: Any] in [
+            ["kind": "whole-vault"],
+            ["excludedCount": 0],
+            ["excludedCount": 2, "truncated": false],
+            ["excludedPaths": ["../outside/"]],
+            ["excludedPaths": ["/"]],
+            ["excludedPaths": Array(repeating: "Ignored/", count: 101), "excludedCount": 101],
+            ["appliedFilters": Array(repeating: "Ignored/", count: 101)]
+        ] {
+            report = scanReport(vault: vault)
+            var scope = try XCTUnwrap(report["scope"] as? [String: Any])
+            scope.merge(changes) { _, new in new }
+            report["scope"] = scope
+            XCTAssertThrowsError(try GrapheineService.validatedScan(JSONSerialization.data(withJSONObject: report), vaultURL: vault))
+        }
+    }
+
+    func testUnavailableAuthorityCannotSupplyActionableQuestions() throws {
+        let vault = URL(fileURLWithPath: "/private/tmp/scoped-fixture")
+        var report = scanReport(vault: vault)
+        report["authority"] = ["status": "unavailable", "message": "Full inventory held", "questions": [[
+            "scope": "fixture", "question": "account", "values": ["Status.md"], "value": "Status.md",
+            "state": "resolved", "writeState": "needs_exact_write_permission", "proofs": []
+        ]]] as [String: Any]
+        XCTAssertThrowsError(try GrapheineService.validatedScan(JSONSerialization.data(withJSONObject: report), vaultURL: vault))
+        report["authority"] = ["status": "unavailable", "message": "Full inventory held", "questions": []] as [String: Any]
+        let scan = try GrapheineService.validatedScan(JSONSerialization.data(withJSONObject: report), vaultURL: vault)
+        XCTAssertEqual(scan.notes, 2)
+        XCTAssertEqual(scan.authority.status, "unavailable")
+        XCTAssertTrue(scan.authority.questions.isEmpty)
+    }
+
+    private func scanReport(vault: URL) -> [String: Any] {
+        ["engineVersion": "fixture", "scannedAt": "2026-10-10T12:00:00+00:00", "vaultPath": vault.path,
+         "notes": 2, "totalGroups": 0, "groups": [], "diagnostics": [], "fingerprint": String(repeating: "a", count: 64),
+         "authority": ["status": "notConfigured", "questions": []] as [String: Any],
+         "scope": ["kind": "markdown-discovery", "excludedPaths": ["Ignored/"], "excludedCount": 1,
+                   "truncated": false, "appliedFilters": ["Ignored/"], "unsupportedFilters": [],
+                   "limitations": ["Discovery is separate from write inventory."]] as [String: Any]]
     }
 
     func testQuestionIdentityDoesNotCollideAcrossScopes() throws {

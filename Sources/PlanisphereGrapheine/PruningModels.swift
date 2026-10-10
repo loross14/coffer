@@ -10,6 +10,18 @@ public struct PruningScan: Decodable, Sendable {
     public let diagnostics: [String]
     public let authority: PruningAuthority
     public let fingerprint: String
+    public let scope: PruningScanScope
+}
+
+/// Coverage of candidate discovery, separate from the full write inventory.
+public struct PruningScanScope: Decodable, Sendable {
+    public let kind: String
+    public let excludedPaths: [String]
+    public let excludedCount: Int
+    public let truncated: Bool
+    public let appliedFilters: [String]
+    public let unsupportedFilters: [String]
+    public let limitations: [String]
 }
 
 public struct PruningGroup: Decodable, Sendable, Identifiable {

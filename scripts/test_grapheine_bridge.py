@@ -230,22 +230,145 @@ class BridgeTests(unittest.TestCase):
             self.assertIn("Code examples would change", result["error"])
             self.assertEqual(before, B.snapshot(self.root))
 
-    def test_links_and_special_files_are_rejected_before_scan(self):
+    def test_discovery_excludes_links_and_special_files_but_root_link_is_rejected(self):
         self.write(self.root / "note.md", "# Note")
         (self.root / "link").symlink_to(self.base)
-        code, result = self.invoke("scan")
-        self.assertNotEqual(code, 0)
-        self.assertIn("Symbolic links", result["error"])
-        (self.root / "link").unlink()
         os.mkfifo(str(self.root / "pipe"))
         code, result = self.invoke("scan")
-        self.assertNotEqual(code, 0)
-        self.assertIn("special files", result["error"])
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["notes"], 1)
+        self.assertIn("link", result["scope"]["excludedPaths"])
+        self.assertIn("pipe", result["scope"]["excludedPaths"])
+        with self.assertRaisesRegex(B.BridgeError, "Symbolic links and special"):
+            B.snapshot(self.root)
         alias = self.base / "alias"; alias.symlink_to(self.root)
         stream = io.StringIO()
         with redirect_stdout(stream):
             code = B.main(["scan", "--engine-root", str(ENGINE), "--vault", str(alias)])
         self.assertNotEqual(code, 0)
+
+    def test_explicit_obsidian_and_hidden_checkout_exclusions(self):
+        self.write(self.root / "Status.md", "# Main")
+        self.write(self.root / "Archive/Status.md", "# Archive")
+        self.write(self.root / "Ignored/Status.md", "# Excluded")
+        self.write(self.root / "Ignored file.md", "# Excluded file")
+        self.write(self.root / "node_modules/Status.md", "# Dependency")
+        self.write(self.root / ".hidden-checkout/Status.md", "# Hidden checkout")
+        (self.root / ".hidden-checkout/core").symlink_to(self.base / "missing")
+        self.write(self.root / ".obsidian/app.json", json.dumps({"userIgnoreFilters": ["Ignored/", "Ignored file.md"]}))
+        code, result = self.invoke("scan")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["notes"], 2)
+        self.assertEqual(set(result["groups"][0]["members"]), {"Status.md", "Archive/Status.md"})
+        scope = result["scope"]
+        self.assertEqual(scope["kind"], "markdown-discovery")
+        self.assertIn("Ignored/", scope["appliedFilters"])
+        for name in ["Ignored/", "Ignored file.md", "node_modules/", ".hidden-checkout/"]:
+            self.assertIn(name, scope["excludedPaths"])
+        self.assertEqual(result["vaultPath"], str(self.root))
+
+    def test_excluded_and_outside_targets_are_never_read_or_probed(self):
+        forbidden = self.base / "Private outside"; forbidden.mkdir()
+        self.write(forbidden / "Secret.md", "not discovery evidence")
+        self.write(self.root / "Included.md", "---\ncanonical_owner: " + str(forbidden / "Secret.md") + "\n---\n[secret](" + str(forbidden / "Secret.md") + ")")
+        self.write(self.root / "Excluded/Secret.md", "not discovery evidence")
+        self.write(self.root / ".obsidian/app.json", json.dumps({"userIgnoreFilters": ["Excluded/"]}))
+        (self.root / "linked.md").symlink_to(forbidden / "Secret.md")
+        original_stat, original_read = Path.stat, Path.read_text
+        def checked_stat(path, *args, **kwargs):
+            if str(path).startswith(str(forbidden)):
+                raise AssertionError("Outside discovery target was probed")
+            return original_stat(path, *args, **kwargs)
+        def checked_read(path, *args, **kwargs):
+            if str(path).startswith(str(forbidden)) or path == self.root / "Excluded/Secret.md":
+                raise AssertionError("Excluded note was read")
+            return original_read(path, *args, **kwargs)
+        with patch.object(Path, "stat", checked_stat), patch.object(Path, "read_text", checked_read):
+            result = B.scan(self.G, self.A, self.root)
+        self.assertEqual(result["notes"], 1)
+        self.assertIn("linked.md", result["scope"]["excludedPaths"])
+
+    def test_binary_contents_are_not_read_and_changes_do_not_invalidate_discovery(self):
+        self.write(self.root / "note.md", "# Note")
+        binary = self.root / "attachment.bin"
+        binary.write_bytes(b"binary contents")
+        identity = binary.stat().st_ino
+        original_read, original_accounts = os.read, self.G._accounts_payload
+        def checked_read(descriptor, size):
+            if os.fstat(descriptor).st_ino == identity:
+                raise AssertionError("Binary contents were read by discovery")
+            return original_read(descriptor, size)
+        def changing_binary(*args, **kwargs):
+            result = original_accounts(*args, **kwargs)
+            binary.write_bytes(b"changed binary contents")
+            return result
+        with patch("os.read", side_effect=checked_read), patch.object(self.G, "_accounts_payload", side_effect=changing_binary):
+            result = B.scan(self.G, self.A, self.root)
+        self.assertEqual(result["notes"], 1)
+
+    def test_original_absolute_owner_maps_only_to_included_note(self):
+        self.write(self.root / "Answer.md", "# Kept")
+        self.write(self.root / "Copy.md", "---\ncanonical_owner: " + str(self.root / "Answer.md") + "\n---\n# Copy")
+        result = B.scan(self.G, self.A, self.root)
+        self.assertEqual(result["totalGroups"], 1)
+        self.assertEqual(result["groups"][0]["declaredCopies"], 1)
+        self.assertEqual(set(result["groups"][0]["members"]), {"Answer.md", "Copy.md"})
+        self.assertIn("canonical_owner", (self.root / "Copy.md").read_text())
+
+    def test_scope_is_bounded_and_unsupported_rules_are_explicit(self):
+        self.write(self.root / "Keep.md", "# Keep")
+        for number in range(105):
+            self.write(self.root / ("binary-%03d.bin" % number), "binary")
+        self.write(self.root / ".obsidian/app.json", json.dumps({"userIgnoreFilters": ["*.md", "/regex/", "../outside", 7]}))
+        result = B.scan(self.G, self.A, self.root)
+        scope = result["scope"]
+        self.assertEqual(result["notes"], 1)
+        self.assertEqual(len(scope["excludedPaths"]), 100)
+        self.assertGreater(scope["excludedCount"], 100)
+        self.assertTrue(scope["truncated"])
+        self.assertEqual(len(scope["unsupportedFilters"]), 4)
+        self.assertFalse(scope["appliedFilters"])
+
+    def test_exclusion_change_during_scan_invalidates_result(self):
+        self.write(self.root / "note.md", "# Note")
+        self.write(self.root / ".obsidian/app.json", "{}")
+        original = self.G._accounts_payload
+        def changing_rules(*args, **kwargs):
+            result = original(*args, **kwargs)
+            self.write(self.root / ".obsidian/app.json", json.dumps({"userIgnoreFilters": ["note.md"]}))
+            return result
+        with patch.object(self.G, "_accounts_payload", side_effect=changing_rules):
+            with self.assertRaisesRegex(B.BridgeError, "scope changed while scanning"):
+                B.scan(self.G, self.A, self.root)
+
+    def test_discovery_exclusions_do_not_weaken_authority_or_preparation(self):
+        self.setup_authority()
+        self.write(self.root / ".hidden-checkout/README.md", "not a note")
+        (self.root / ".hidden-checkout/core").symlink_to(self.base / "missing")
+        code, result = self.invoke("scan", "--policy", str(self.policy))
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["notes"], 4)
+        self.assertEqual(result["authority"]["status"], "unavailable")
+        self.assertIn("Symbolic links and special", result["authority"]["message"])
+        code, result = self.prepare()
+        self.assertNotEqual(code, 0)
+        self.assertIn("Symbolic links and special", result["error"])
+
+    def test_excluded_invalid_markdown_is_not_opened(self):
+        self.write(self.root / "Good.md", "# Good")
+        self.write(self.root / ".obsidian/app.json", json.dumps({"userIgnoreFilters": ["Excluded/"]}))
+        self.write(self.root / "Excluded/Bad.md", "placeholder")
+        (self.root / "Excluded/Bad.md").write_bytes(b"bad \xff")
+        code, result = self.invoke("scan")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["notes"], 1)
+
+    def test_unreadable_exclusion_config_does_not_silently_ignore_rules(self):
+        self.write(self.root / "Good.md", "# Good")
+        self.write(self.root / ".obsidian/app.json", "not JSON")
+        code, result = self.invoke("scan")
+        self.assertNotEqual(code, 0)
+        self.assertIn("exclusion settings", result["error"])
 
     def test_changed_scan_is_not_published(self):
         self.write(self.root / "note.md", "old")

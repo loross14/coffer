@@ -4,6 +4,25 @@ import PlanisphereManaged
 import Testing
 
 struct ReplicaTransportTests {
+    @Test(arguments: [1, 2])
+    func symbolicLinkCheckpointsAreExplicitlyUnsupported(_ version: Int) async throws {
+        let replica = InMemoryReplica()
+        let scope = ReplicaScope(tenantID: "owner", vaultID: UUID())
+        let target = Data("../external-folder".utf8)
+        let digest = ReplicaDigest.sha256(target)
+        try await replica.uploadObject(target, digest: digest, in: scope)
+        let checkpoint = Checkpoint(formatVersion: version, vaultID: scope.vaultID, parentID: nil,
+            message: "Local symbolic link", entries: [
+                FileEntry(path: "link", kind: .symbolicLink, digest: digest, size: Int64(target.count))
+            ])
+        let reason = version == 2 ? "Unsupported format version."
+            : "Symbolic links require checkpoint format 2, which this managed reference does not support."
+        await expectError(.invalidCheckpoint(reason)) {
+            _ = try await replica.publish(ReplicaPublication(expectedParentID: nil, checkpoint: checkpoint), in: scope)
+        }
+        #expect(try await replica.head(in: scope) == nil)
+    }
+
     private func makeCheckpoint(scope: ReplicaScope, id: UUID = UUID(), parentID: UUID? = nil,
                                 entries: [FileEntry] = []) -> Checkpoint {
         Checkpoint(id: id, vaultID: scope.vaultID, parentID: parentID,

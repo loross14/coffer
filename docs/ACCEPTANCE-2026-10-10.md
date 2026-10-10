@@ -31,3 +31,19 @@ The fixture is temporary, not part of the app or a permanent backup. Test logs a
 ## Readiness and boundaries
 
 Ready for use as a local candidate on the tested Mac. Public release still requires the signing, notarization, architecture and clean-machine checks in [release.md](release.md). The managed library is an in-memory reference, not an available hosted service. Checkpoints are explicit; restoration creates a new copy. History is plaintext on this Mac and does not provide device-loss backup. File metadata and compatibility limits are documented in [LOCAL-STORAGE.md](LOCAL-STORAGE.md).
+
+## 0.3.0 — mixed development vault checkpoint repair
+
+The reported failure came from **Create Checkpoint** on `planisphere-build`: a symbolic link in `.pricing-delivery-2026-09-17/planisphere/core` was rejected. A partial inventory also exceeded the existing 250,000-entry cap before finishing the nested development trees. Raising the cap or following the link would not provide a useful vault checkpoint.
+
+The app now preserves symbolic-link target bytes without following them. Create Checkpoint presents Vault Content and Whole Folder for explicit review. Vault Content retains included files and Obsidian settings, applies supported literal Obsidian exclusions, and omits other hidden/dependency folders. The frozen scope is saved in format-2 history and shown again during restore/export. Format-1 history remains readable. Grapheine discovery uses its own bounded Markdown scope, while signed write checks remain strict.
+
+Validation:
+
+- Full Swift run: 33 XCTest cases and 13 managed-reference tests passed. A subsequent fifth link/scope case verified that changing excluded settings during capture also fails closed; the final four scope tests passed again after preserving hidden plugin settings within `.obsidian`. Together these cover 34 distinct XCTest cases. No test writes were made to a live vault.
+- Python bridge: 25 cases passed, including scoped discovery, no external target probing, freshness and unchanged signed settlement checks.
+- Packaged native UI, disposable mixed folder: created a Vault Content checkpoint (four files, three links), inspected an external link's target preview, restored that checkpoint to a new folder, then captured Whole Folder (five files, four links, including the hidden checkout link). Direct verification confirmed every restored included file and link target, both retained manifests' objects, omitted checkout paths, and unchanged original/external files.
+- Disposable fixture `/private/tmp/planisphere-checkpoint-qa-bdv7rfyt`; original vault `B9683F08-C745-4AAC-9A2F-4C2702DEEFCD`; scoped checkpoint `840B5679-7485-4B05-9D75-D0EAD8C56AF9`; whole-folder checkpoint `D768E5CC-A9FC-41D4-A287-F2D9F7DA66BC`. Its `verified.json` records independent content checks, not metadata-envelope re-encoding.
+- Independent source review found one settings-subtree mismatch; the final scope now preserves `.obsidian` descendants unless explicitly excluded, with a regression fixture. The final package was rebuilt and reopened. Existing Mythology-Graph format-1 history remained readable.
+- Final app on `planisphere-build`: pruning scanned 973 Markdown notes successfully. Checkpoint review completed in about two seconds and showed 15,409 files, 935 folders, 13 links, 4.01 GB and 207 excluded locations. These are observed estimates; capture validates the selected contents again. The reviewed scope was left for the user to accept before saving a live checkpoint.
+- Final local ZIP SHA-256: `2706c419b5e50c7d8c2dcf49d5529eb12497da53de415772c135fa49743f54f3`. Packaging verified the ad-hoc signature. The app remains a local candidate, not a notarized public release.

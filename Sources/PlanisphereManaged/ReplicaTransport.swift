@@ -176,7 +176,7 @@ public actor InMemoryReplica: ReplicaTransport {
 
     private func validate(_ checkpoint: Checkpoint, scope: ReplicaScope,
                           expectedParentID: UUID?, objects: [String: Data]) throws {
-        guard checkpoint.formatVersion == 1 else {
+        guard checkpoint.formatVersion == 1, checkpoint.captureScope == nil else {
             throw ReplicaError.invalidCheckpoint("Unsupported format version.")
         }
         guard checkpoint.vaultID == scope.vaultID else {
@@ -202,6 +202,8 @@ public actor InMemoryReplica: ReplicaTransport {
                 throw ReplicaError.invalidCheckpoint("Negative file size: \(entry.path)")
             }
             switch entry.kind {
+            case .symbolicLink:
+                throw ReplicaError.invalidCheckpoint("Symbolic links require checkpoint format 2, which this managed reference does not support.")
             case .directory:
                 guard entry.digest == nil, entry.size == 0, !entry.executable else {
                     throw ReplicaError.invalidCheckpoint("Invalid directory entry: \(entry.path)")

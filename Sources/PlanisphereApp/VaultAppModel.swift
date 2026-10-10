@@ -29,6 +29,11 @@ final class VaultAppModel {
     var beforeText: String?
     var afterText: String?
     var checkpointMessage = ""
+    var checkpointReviewPresented = false
+    var checkpointMode: CheckpointMode = .vaultContent
+    var checkpointPlan: CheckpointPlan?
+    var checkpointPlanError: String?
+    private var checkpointReviewVaultID: UUID?
     var historyReadError: String?
     var pruningScan: PruningScan?
     var pruningError: String?
@@ -165,12 +170,59 @@ final class VaultAppModel {
 
     func createCheckpoint() {
         guard !isBusy, historyReadError == nil, let vault = selectedVault else { return }
+        checkpointReviewVaultID = vault.id
+        checkpointReviewPresented = true
+        reviewCheckpointMode(.vaultContent)
+    }
+
+    func reviewCheckpointMode(_ mode: CheckpointMode) {
+        guard !isBusy, let vault = selectedVault, vault.id == checkpointReviewVaultID else { return }
+        checkpointMode = mode
+        checkpointPlan = nil
+        checkpointPlanError = nil
+        Task {
+            await perform("Reviewing checkpoint contents") { store in
+                do {
+                    let plan = try await store.checkpointPlan(vaultID: vault.id, mode: mode)
+                    guard self.checkpointReviewPresented, self.checkpointReviewVaultID == vault.id else { return }
+                    self.checkpointPlan = plan
+                } catch {
+                    self.checkpointPlanError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func cancelCheckpointReview() {
+        guard !isBusy else { return }
+        checkpointReviewPresented = false
+        checkpointPlan = nil
+        checkpointPlanError = nil
+        checkpointReviewVaultID = nil
+    }
+
+    func saveReviewedCheckpoint() {
+        guard !isBusy, historyReadError == nil, let vault = selectedVault,
+              vault.id == checkpointReviewVaultID, let plan = checkpointPlan,
+              plan.mode == checkpointMode else { return }
         let message = checkpointMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         Task {
             await perform("Saving local checkpoint") { store in
-                let checkpoint = try await store.createCheckpoint(vaultID: vault.id, message: message.isEmpty ? "Checkpoint" : message)
+                let checkpoint: Checkpoint
+                do {
+                    checkpoint = try await store.createCheckpoint(vaultID: vault.id,
+                        message: message.isEmpty ? "Checkpoint" : message, scope: plan.scope)
+                } catch {
+                    self.checkpointPlan = nil
+                    self.checkpointPlanError = "The checkpoint was not saved. Review the contents again before retrying.\n\n\(error.localizedDescription)"
+                    return
+                }
+                self.checkpointReviewPresented = false
+                self.checkpointPlan = nil
+                self.checkpointReviewVaultID = nil
                 self.checkpointMessage = ""
-                let completion = "Checkpoint saved on this Mac at \(checkpoint.createdAt.formatted(date: .omitted, time: .standard)). \(checkpoint.fileCount) files preserved."
+                let scopeNotice = plan.mode == .vaultContent ? " Vault Content exclusions were applied; excluded content was not saved." : ""
+                let completion = "Checkpoint saved on this Mac at \(checkpoint.createdAt.formatted(date: .omitted, time: .standard)). \(self.checkpointContentSummary(checkpoint)) preserved.\(scopeNotice)"
                 await self.refreshAfterCompletion(completion) {
                     try await self.reloadHistory(store: store, preferred: checkpoint.id)
                 }
@@ -181,7 +233,7 @@ final class VaultAppModel {
     func restoreCopy() {
         guard !isBusy, let vault = selectedVault, let checkpoint = selectedCheckpoint,
               let url = newFolderDestination(title: "Restore a New Copy", prompt: "Restore Copy", name: "\(vault.name) — Recovered",
-                  message: "Restore this checkpoint into a new folder. Your original vault and its newer work remain untouched. The recovered copy will be added as a separate vault.") else { return }
+                  message: "Restore this checkpoint into a new folder. Your original vault and its newer work remain untouched. The recovered copy will be added as a separate vault." + (checkpoint.captureScope != nil ? " This is a Vault Content checkpoint: excluded content was not saved and will not appear in the recovered copy." : "") + (checkpoint.symbolicLinkCount > 0 ? " Symbolic links are recreated with their saved targets; they can refer outside the recovered folder. Referenced contents are not copied through those links." : "")) else { return }
         Task {
             await perform("Verifying and restoring a new copy") { store in
                 let recovered = try await store.restoreCopy(vaultID: vault.id, checkpointID: checkpoint.id, destination: url)
@@ -195,7 +247,7 @@ final class VaultAppModel {
     func exportVault() {
         guard !isBusy, historyReadError == nil, !checkpoints.isEmpty, let vault = selectedVault,
               let url = newFolderDestination(title: "Export Vault and History", prompt: "Export", name: "\(vault.name) — Export",
-                  message: "Export the latest saved checkpoint and all retained history into a new folder. Changes since the last checkpoint are not included. The working vault stays in place.") else { return }
+                  message: "Export the latest saved checkpoint and all retained history into a new folder. Changes since the last checkpoint are not included. The working vault stays in place." + (checkpoints.first?.captureScope != nil ? " The latest checkpoint contains Vault Content only; excluded content was not saved and will not appear in its exported copy." : "") + ((checkpoints.first?.symbolicLinkCount ?? 0) > 0 ? " Symbolic links are exported as references, including targets outside the folder; referenced contents are not copied through them." : "")) else { return }
         Task {
             await perform("Preparing a complete export") { store in
                 let exported = try await store.exportVault(vaultID: vault.id, destination: url)
@@ -234,6 +286,11 @@ final class VaultAppModel {
     }
 
     func reveal(_ url: URL) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+
+    func checkpointContentSummary(_ checkpoint: Checkpoint) -> String {
+        let files = "\(checkpoint.fileCount) files"
+        return checkpoint.symbolicLinkCount == 0 ? files : "\(files) · \(checkpoint.symbolicLinkCount) symbolic links"
+    }
 
     // MARK: - Grapheine pruning
 
@@ -563,10 +620,10 @@ final class VaultAppModel {
         guard let checkpoint = selectedCheckpoint else { return }
         var before: String?
         var after: String?
-        if let parent = checkpoint.parentID, change.oldEntry?.kind == .file {
+        if let parent = checkpoint.parentID, let kind = change.oldEntry?.kind, kind == .file || kind == .symbolicLink {
             before = try await store.text(vaultID: checkpoint.vaultID, checkpointID: parent, path: change.path)
         }
-        if change.newEntry?.kind == .file {
+        if let kind = change.newEntry?.kind, kind == .file || kind == .symbolicLink {
             after = try await store.text(vaultID: checkpoint.vaultID, checkpointID: checkpoint.id, path: change.path)
         }
         selectedChangePath = change.path

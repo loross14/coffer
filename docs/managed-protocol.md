@@ -4,6 +4,8 @@
 
 This is an executable **in-memory protocol reference**, not a hosted service or durable backup. It defines the minimum publication behavior a later authenticated storage adapter must preserve. An instance starts empty and loses every object, checkpoint and operation receipt on process exit.
 
+The reference currently accepts only unscoped format-1 checkpoints with files and directories. Mac 0.3.0 can create format-2 checkpoints containing symbolic links or an explicit content scope; this reference deliberately refuses those without advancing its head. Supporting their complete semantics is required before offering managed publication of those checkpoints.
+
 ## Shared format and API
 
 - `ReplicaScope(tenantID:vaultID:)` names a logical tenant/vault boundary. The reference validates tenant identifier syntax, but does **not authenticate callers**. A future server must derive or authorize the scope against its authenticated identity; accepting a caller's arbitrary tenant ID would not be secure isolation.

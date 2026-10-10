@@ -26,13 +26,35 @@ public actor GrapheineService {
 
     public func scan(vaultURL: URL, policyURL: URL? = nil) async throws -> PruningScan {
         let data = try await invoke("scan", vaultURL: vaultURL, policyURL: policyURL)
+        return try Self.validatedScan(data, vaultURL: vaultURL)
+    }
+
+    internal nonisolated static func validatedScan(_ data: Data, vaultURL: URL) throws -> PruningScan {
         let scan = try JSONDecoder().decode(PruningScan.self, from: data)
         guard scan.vaultPath == vaultURL.path, scan.notes >= 0, scan.totalGroups >= scan.groups.count,
+              scan.groups.count <= 200, scan.authority.questions.count <= 200,
               Set(scan.groups.map(\.id)).count == scan.groups.count,
-              Set(scan.authority.questions.map(\.id)).count == scan.authority.questions.count else {
+              Set(scan.authority.questions.map(\.id)).count == scan.authority.questions.count,
+              ["available", "notConfigured", "unavailable"].contains(scan.authority.status),
+              scan.authority.status == "available" || scan.authority.questions.isEmpty else {
             throw GrapheineError.invalidResponse("Grapheine returned a report for another folder or an incomplete count.")
         }
-        for group in scan.groups { for path in group.members { try Self.validateRelativePath(path) } }
+        let scope = scan.scope
+        guard scope.kind == "markdown-discovery", scope.excludedCount >= scope.excludedPaths.count,
+              scope.excludedPaths.count <= 100, scope.appliedFilters.count <= 100,
+              scope.unsupportedFilters.count <= 100, scope.limitations.count <= 100,
+              scope.truncated == (scope.excludedCount > scope.excludedPaths.count) else {
+            throw GrapheineError.invalidResponse("Grapheine returned incomplete or unsupported scan coverage. Scan again with the current engine.")
+        }
+        for path in scope.excludedPaths {
+            try Self.validateRelativePath(path.hasSuffix("/") ? String(path.dropLast()) : path)
+        }
+        for group in scan.groups {
+            guard group.members.count <= 1_000, group.declaredCopies >= 0 else {
+                throw GrapheineError.invalidResponse("Grapheine returned an incomplete candidate group.")
+            }
+            for path in group.members { try Self.validateRelativePath(path) }
+        }
         return scan
     }
 

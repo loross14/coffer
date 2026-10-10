@@ -4,6 +4,7 @@ import PlanisphereCore
 struct VaultWorkspaceView: View {
     @Bindable var model: VaultAppModel
     @State private var confirmRemoval = false
+    @State private var showSavedScope = false
 
     var body: some View {
         GeometryReader { bounds in
@@ -15,6 +16,10 @@ struct VaultWorkspaceView: View {
             .frame(width: bounds.size.width, height: bounds.size.height)
         }
         .tint(Color(red: 0.26, green: 0.39, blue: 0.72))
+        .sheet(isPresented: $model.checkpointReviewPresented) {
+            CheckpointReviewView(model: model)
+                .interactiveDismissDisabled(model.isBusy)
+        }
         .alert("Planisphere needs attention", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }
@@ -312,7 +317,9 @@ struct VaultWorkspaceView: View {
                                 }
                                 Text(checkpoint.createdAt.formatted(date: .abbreviated, time: .shortened))
                                     .font(.caption2).foregroundStyle(.secondary)
-                                Text("\(checkpoint.fileCount) files · \(bytes(checkpoint.totalBytes))")
+                                Text("\(model.checkpointContentSummary(checkpoint)) · \(bytes(checkpoint.totalBytes))")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                                Text(checkpoint.captureScope == nil ? "Whole Folder" : "Vault Content · exclusions applied")
                                     .font(.caption2).foregroundStyle(.secondary)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -339,8 +346,16 @@ struct VaultWorkspaceView: View {
                             .font(.system(size: 13, weight: .semibold))
                         Text("\(model.changes.count) changed items · saved locally")
                             .font(.caption).foregroundStyle(.secondary)
+                        if checkpoint.captureScope != nil {
+                            Text("Excluded content is not in this checkpoint. Saving does not remove working files.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                     Spacer()
+                    if let scope = checkpoint.captureScope {
+                        Button("Saved Exclusions") { showSavedScope = true }
+                            .popover(isPresented: $showSavedScope) { savedScope(scope) }
+                    }
                     Button("Restore Copy…", systemImage: "arrow.uturn.backward") { model.restoreCopy() }
                         .disabled(model.isBusy)
                         .accessibilityIdentifier("restore-copy")
@@ -380,7 +395,8 @@ struct VaultWorkspaceView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(change.path).font(.system(size: 12, weight: .medium)).lineLimit(3)
                                     .truncationMode(.middle)
-                                Text(change.kind.rawValue.capitalized).font(.caption2).foregroundStyle(.secondary)
+                                Text(change.kind.rawValue.capitalized + ((change.newEntry ?? change.oldEntry)?.kind == .symbolicLink ? " · symbolic link" : ""))
+                                    .font(.caption2).foregroundStyle(.secondary)
                             }
                             Spacer(minLength: 0)
                         }
@@ -397,11 +413,32 @@ struct VaultWorkspaceView: View {
         .accessibilityIdentifier("changed-files")
     }
 
+    private func savedScope(_ scope: CheckpointScope) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Saved Vault Content scope").font(.headline)
+            Text("This checkpoint excludes hidden folders other than the root .obsidian folder, node_modules, __pycache__, and the literal paths below. Explicit paths can also exclude Obsidian settings. Excluded content is absent from recovered copies.")
+                .font(.callout).foregroundStyle(.secondary)
+            Text("\(scope.excludedPaths.count) saved path rules").font(.caption.weight(.semibold))
+            ScrollView {
+                Text(scope.excludedPaths.isEmpty ? "No explicit path exclusions." : scope.excludedPaths.prefix(200).joined(separator: "\n"))
+                    .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(minHeight: 0, maxHeight: .infinity)
+            if scope.excludedPaths.count > 200 {
+                Text("Showing 200 of \(scope.excludedPaths.count) saved rules. The complete scope is retained in checkpoint metadata and exported history.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Button("Done") { showSavedScope = false }.frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .padding(22).frame(width: 520, height: 420)
+    }
+
     private var filePreview: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let change = model.selectedChange {
                 HStack {
-                    Image(systemName: (change.newEntry ?? change.oldEntry)?.kind == .directory ? "folder" : "doc.text")
+                    Image(systemName: entrySymbol(change.newEntry ?? change.oldEntry))
                     Text(change.path).lineLimit(2).textSelection(.enabled)
                     Spacer(minLength: 0)
                 }
@@ -434,13 +471,18 @@ struct VaultWorkspaceView: View {
                 Text(title).font(.system(size: 10, weight: .semibold)).tracking(1).foregroundStyle(.secondary)
                 if let entry { Text(bytes(entry.size)).font(.caption2).foregroundStyle(.tertiary) }
             }
+            if entry?.kind == .symbolicLink {
+                Text("Symbolic link target — referenced contents are not saved through this link.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: 340, alignment: .leading)
+            }
             if let text {
                 Text(text.isEmpty ? "Empty file" : text)
                     .font(.system(size: 12, design: .monospaced)).lineSpacing(4)
                     .foregroundStyle(text.isEmpty ? .secondary : .primary)
                     .textSelection(.enabled).fixedSize(horizontal: true, vertical: true)
             } else {
-                Text(entry == nil ? absent : entry?.kind == .directory ? "Folder" : "No text preview. Binary or larger files are preserved in the checkpoint.")
+                Text(entry == nil ? absent : entry?.kind == .directory ? "Folder" : entry?.kind == .symbolicLink ? "The target has no text preview. Its exact bytes are preserved in the checkpoint." : "No text preview. Binary or larger files are preserved in the checkpoint.")
                     .font(.callout).foregroundStyle(.secondary).frame(maxWidth: 310, alignment: .leading)
             }
         }
@@ -462,6 +504,13 @@ struct VaultWorkspaceView: View {
     }
 
     private func bytes(_ count: Int64) -> String { ByteCountFormatter.string(fromByteCount: count, countStyle: .file) }
+    private func entrySymbol(_ entry: FileEntry?) -> String {
+        switch entry?.kind {
+        case .directory: return "folder"
+        case .symbolicLink: return "link"
+        default: return "doc.text"
+        }
+    }
     private func changeSymbol(_ kind: FileChange.Kind) -> String {
         switch kind { case .added: return "plus"; case .modified: return "pencil"; case .deleted: return "minus" }
     }

@@ -22,7 +22,7 @@ public struct RestorationOrigin: Codable, Equatable, Sendable {
 }
 
 public struct FileEntry: Codable, Equatable, Sendable {
-    public enum Kind: String, Codable, Sendable { case file, directory }
+    public enum Kind: String, Codable, Sendable { case file, directory, symbolicLink }
     public let path: String
     public let kind: Kind
     public let digest: String?
@@ -42,11 +42,13 @@ public struct Checkpoint: Identifiable, Codable, Equatable, Sendable {
     public let message: String
     public let entries: [FileEntry]
     public let restoredFrom: RestorationOrigin?
-    public init(formatVersion: Int = 1, id: UUID = UUID(), vaultID: UUID, parentID: UUID?, createdAt: Date = Date(), message: String, entries: [FileEntry], restoredFrom: RestorationOrigin? = nil) {
+    public let captureScope: CheckpointScope?
+    public init(formatVersion: Int = 1, id: UUID = UUID(), vaultID: UUID, parentID: UUID?, createdAt: Date = Date(), message: String, entries: [FileEntry], restoredFrom: RestorationOrigin? = nil, captureScope: CheckpointScope? = nil) {
         self.formatVersion = formatVersion; self.id = id; self.vaultID = vaultID; self.parentID = parentID
-        self.createdAt = createdAt; self.message = message; self.entries = entries; self.restoredFrom = restoredFrom
+        self.createdAt = createdAt; self.message = message; self.entries = entries; self.restoredFrom = restoredFrom; self.captureScope = captureScope
     }
     public var fileCount: Int { entries.filter { $0.kind == .file }.count }
+    public var symbolicLinkCount: Int { entries.filter { $0.kind == .symbolicLink }.count }
     public var totalBytes: Int64 { entries.reduce(0) { $0 + $1.size } }
 }
 

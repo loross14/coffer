@@ -112,8 +112,16 @@ public actor VaultStore {
         }
     }
 
-    public func createCheckpoint(vaultID: UUID, message: String) throws -> Checkpoint {
-        try operation { root in try captureAndPublish(record(vaultID, root: root), message: message, root: root) }
+    public func createCheckpoint(vaultID: UUID, message: String, scope: CheckpointScope? = nil) throws -> Checkpoint {
+        try operation { root in try captureAndPublish(record(vaultID, root: root), message: message, scope: scope, root: root) }
+    }
+
+    public func checkpointPlan(vaultID: UUID, mode: CheckpointMode) throws -> CheckpointPlan {
+        try operation { root in
+            let vault = try record(vaultID, root: root)
+            let source = try VaultFS.directory(sourceURL(vault.url))
+            return try CheckpointScopePlanner.plan(source: source, mode: mode)
+        }
     }
 
     public func changes(vaultID: UUID, from: UUID?, to: UUID) throws -> [FileChange] {
@@ -137,7 +145,7 @@ public actor VaultStore {
             try VaultFS.relative(path)
             _ = try record(vaultID, root: root)
             let version = try checkpoint(checkpointID, in: history(vaultID, root: root))
-            guard let entry = version.entries.first(where: { $0.path == path }), entry.kind == .file,
+            guard let entry = version.entries.first(where: { $0.path == path }), entry.kind != .directory,
                   entry.size <= 512 * 1024, let digest = entry.digest else { return nil }
             let objects = try VaultFS.childDirectory(root, "objects")
             let data = try VaultFS.read(objects, digest, maximum: 512 * 1024)
@@ -162,7 +170,7 @@ public actor VaultStore {
             try materialize(version, into: stage, root: root)
             let origin = RestorationOrigin(vaultID: vaultID, checkpointID: checkpointID)
             let restored = VaultRecord(name: try displayName(destination.lastPathComponent), path: destination.path, restoredFrom: origin)
-            let first = Checkpoint(vaultID: restored.id, parentID: nil, message: "Restored copy", entries: version.entries, restoredFrom: origin)
+            let first = Checkpoint(formatVersion: version.formatVersion, vaultID: restored.id, parentID: nil, message: "Restored copy", entries: version.entries, restoredFrom: origin, captureScope: version.captureScope)
             // Prepare recoverable history before exposing any new working folder.
             try publish(first, root: root)
             try VaultFS.publishDirectory(parent: parent, temporary: temporary, destination: destination.lastPathComponent)
@@ -202,7 +210,7 @@ public actor VaultStore {
             let exportedObjects = try VaultFS.childDirectory(historyFolder, "objects", create: true)
             var copied: Set<String> = []
             for version in versions {
-                for entry in version.entries where entry.kind == .file {
+                for entry in version.entries where entry.kind != .directory {
                     guard let digest = entry.digest else { throw VaultStoreError.corrupt("missing object digest") }
                     if copied.insert(digest).inserted { try copyObject(entry, to: exportedObjects, name: digest, root: root) }
                 }
@@ -327,15 +335,22 @@ public actor VaultStore {
     }
 
     private func validate(_ checkpoint: Checkpoint) throws {
-        guard checkpoint.formatVersion == 1, checkpoint.createdAt.timeIntervalSince1970.isFinite,
+        guard [1, 2].contains(checkpoint.formatVersion), checkpoint.createdAt.timeIntervalSince1970.isFinite,
               checkpoint.entries.count <= 250_000, checkpoint.parentID != checkpoint.id else {
             throw VaultStoreError.corrupt("invalid checkpoint header")
         }
+        guard checkpoint.formatVersion == 2 || checkpoint.captureScope == nil else {
+            throw VaultStoreError.corrupt("capture scope requires checkpoint format 2")
+        }
+        try checkpoint.captureScope?.validate()
         var paths: [String: FileEntry] = [:]
         var portablePaths: Set<String> = []
         var totalBytes: Int64 = 0
         for entry in checkpoint.entries {
             try VaultFS.relative(entry.path)
+            guard checkpoint.captureScope?.excludes(entry.path, isDirectory: entry.kind == .directory) != true else {
+                throw VaultStoreError.corrupt("checkpoint includes a path excluded by its recorded scope")
+            }
             guard paths[entry.path] == nil, portablePaths.insert(VaultFS.portablePathKey(entry.path)).inserted,
                   entry.size >= 0 else { throw VaultStoreError.corrupt("case/Unicode path collision or invalid size") }
             let (sum, overflow) = totalBytes.addingReportingOverflow(entry.size)
@@ -346,6 +361,12 @@ public actor VaultStore {
             } else {
                 guard let digest = entry.digest, digest.count == 64,
                       digest.allSatisfy({ "0123456789abcdef".contains($0) }) else { throw VaultStoreError.corrupt("invalid object digest") }
+                if entry.kind == .symbolicLink {
+                    guard checkpoint.formatVersion == 2, !entry.executable,
+                          entry.size > 0, entry.size <= Int64(VaultFS.symbolicLinkLimit) else {
+                        throw VaultStoreError.corrupt("invalid symbolic-link entry or format version")
+                    }
+                }
             }
             paths[entry.path] = entry
         }
@@ -378,7 +399,7 @@ public actor VaultStore {
             let version: Checkpoint = try Self.read(current.uuidString + ".json", in: manifests)
             guard version.id == current, version.vaultID == id else { throw VaultStoreError.corrupt("history identity mismatch") }
             try validate(version)
-            for entry in version.entries where entry.kind == .file {
+            for entry in version.entries where entry.kind != .directory {
                 let digest = entry.digest!
                 if let size = objects[digest] {
                     guard size == entry.size else { throw VaultStoreError.corrupt("inconsistent object sizes") }
@@ -386,6 +407,8 @@ public actor VaultStore {
                     try verifyObject(entry, root: root)
                     objects[digest] = entry.size
                 }
+                // An object shared with a regular file must still pass link-target validation.
+                if entry.kind == .symbolicLink { _ = try symbolicLinkTarget(entry, root: root) }
             }
             result.append(version); next = version.parentID
         }
@@ -405,21 +428,39 @@ public actor VaultStore {
         guard result.digest == digest, result.size == entry.size else { throw VaultStoreError.corrupt("file object checksum mismatch") }
     }
 
-    private func captureAndPublish(_ record: VaultRecord, message: String, root: VaultFS.Handle) throws -> Checkpoint {
+    private func symbolicLinkTarget(_ entry: FileEntry, root: VaultFS.Handle) throws -> Data {
+        guard entry.kind == .symbolicLink, let digest = entry.digest,
+              entry.size > 0, entry.size <= Int64(VaultFS.symbolicLinkLimit) else {
+            throw VaultStoreError.corrupt("invalid symbolic-link object")
+        }
+        let objects = try VaultFS.childDirectory(root, "objects")
+        let data = try VaultFS.read(objects, digest, maximum: VaultFS.symbolicLinkLimit)
+        guard Int64(data.count) == entry.size, VaultFS.hash(data) == digest else {
+            throw VaultStoreError.corrupt("symbolic-link target does not match its manifest")
+        }
+        try VaultFS.validateSymbolicLinkTarget(data)
+        return data
+    }
+
+    private func captureAndPublish(_ record: VaultRecord, message: String, scope: CheckpointScope?, root: VaultFS.Handle) throws -> Checkpoint {
         guard message.utf8.count <= 65536 else { throw VaultStoreError.invalid("Checkpoint message is too long.") }
         let previous = try history(record.id, root: root).first
         let source = try VaultFS.directory(sourceURL(record.url))
-        let first = try inventory(source, root: root, persist: true)
+        try scope?.validate()
+        try scope?.verifySource(source)
+        let first = try inventory(source, root: root, persist: true, scope: scope)
         try captureValidationHook?()
         let secondSource = try VaultFS.directory(sourceURL(record.url))
-        let second = try inventory(secondSource, root: root, persist: false)
+        let second = try inventory(secondSource, root: root, persist: false, scope: scope)
+        try scope?.verifySource(secondSource)
         guard first.entries == second.entries, first.stamps == second.stamps else { throw VaultStoreError.changedDuringCapture }
-        let version = Checkpoint(vaultID: record.id, parentID: previous?.id, message: message, entries: first.entries, restoredFrom: record.restoredFrom)
+        let formatVersion = scope != nil || first.entries.contains(where: { $0.kind == .symbolicLink }) ? 2 : 1
+        let version = Checkpoint(formatVersion: formatVersion, vaultID: record.id, parentID: previous?.id, message: message, entries: first.entries, restoredFrom: record.restoredFrom, captureScope: scope)
         try publish(version, root: root)
         return version
     }
 
-    private func inventory(_ source: VaultFS.Handle, root: VaultFS.Handle, persist: Bool) throws -> Capture {
+    private func inventory(_ source: VaultFS.Handle, root: VaultFS.Handle, persist: Bool, scope: CheckpointScope?) throws -> Capture {
         let objects = try VaultFS.childDirectory(root, "objects")
         var entries: [FileEntry] = []
         var stamps: [String: VaultFS.Stamp] = [:]
@@ -430,6 +471,7 @@ public actor VaultStore {
                 let path = prefix.isEmpty ? name : prefix + "/" + name
                 try VaultFS.relative(path)
                 guard let info = try VaultFS.entryInfo(directory, name) else { throw VaultStoreError.changedDuringCapture }
+                if scope?.excludes(path, isDirectory: (info.st_mode & S_IFMT) == S_IFDIR) == true { continue }
                 switch info.st_mode & S_IFMT {
                 case S_IFDIR:
                     let child = try VaultFS.childDirectory(directory, name)
@@ -460,8 +502,22 @@ public actor VaultStore {
                     }
                     entries.append(FileEntry(path: path, kind: .file, digest: streamed.digest, size: streamed.size, executable: info.st_mode & 0o111 != 0))
                     stamps[path] = VaultFS.Stamp(info)
+                case S_IFLNK:
+                    let data = try VaultFS.readSymbolicLink(directory, name)
+                    guard let after = try VaultFS.entryInfo(directory, name), VaultFS.Stamp(info) == VaultFS.Stamp(after) else {
+                        throw VaultStoreError.changedDuringCapture
+                    }
+                    let digest = VaultFS.hash(data)
+                    let entry = FileEntry(path: path, kind: .symbolicLink, digest: digest, size: Int64(data.count))
+                    if persist {
+                        if try VaultFS.entryInfo(objects, digest) == nil {
+                            try VaultFS.atomicData(data, parent: objects, name: digest, replace: false)
+                        } else { _ = try symbolicLinkTarget(entry, root: root) }
+                    }
+                    entries.append(entry)
+                    stamps[path] = VaultFS.Stamp(info)
                 default:
-                    throw VaultStoreError.invalid("Symbolic links and special files are unsupported: \(path)")
+                    throw VaultStoreError.invalid("Special files such as sockets and pipes are unsupported: \(path)")
                 }
                 guard entries.count <= 250_000 else { throw VaultStoreError.invalid("This vault exceeds the current 250,000-entry limit.") }
             }
@@ -482,13 +538,21 @@ public actor VaultStore {
     private func materialize(_ version: Checkpoint, into destination: VaultFS.Handle, root: VaultFS.Handle) throws {
         try validate(version)
         // Parent-before-child ordering; explicit directory entries retain empty folders.
-        for entry in version.entries.sorted(by: { $0.path.split(separator: "/").count < $1.path.split(separator: "/").count }) {
+        for entry in version.entries.filter({ $0.kind != .symbolicLink }).sorted(by: { $0.path.split(separator: "/").count < $1.path.split(separator: "/").count }) {
             let components = entry.path.split(separator: "/").map(String.init)
             var parent = destination
             for component in components.dropLast() { parent = try VaultFS.childDirectory(parent, component) }
             let name = components.last!
             if entry.kind == .directory { _ = try VaultFS.childDirectory(parent, name, create: true) }
             else { try copyObject(entry, to: parent, name: name, root: root) }
+        }
+        // No regular content is written after links exist. Link targets may be absolute,
+        // outside this folder, or broken; preserve the reference without following it.
+        for entry in version.entries where entry.kind == .symbolicLink {
+            let components = entry.path.split(separator: "/").map(String.init)
+            var parent = destination
+            for component in components.dropLast() { parent = try VaultFS.childDirectory(parent, component) }
+            try VaultFS.createSymbolicLink(symbolicLinkTarget(entry, root: root), parent: parent, name: components.last!)
         }
         for entry in version.entries.filter({ $0.kind == .directory }).sorted(by: { $0.path.count > $1.path.count }) {
             var directory = destination
