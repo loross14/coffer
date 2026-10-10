@@ -4,6 +4,7 @@ import PlanisphereGrapheine
 struct PruningView: View {
     @Bindable var model: VaultAppModel
     @State private var confirmApply = false
+    @State private var confirmDisconnectPolicy = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,10 +27,21 @@ struct PruningView: View {
             }
         }
         .confirmationDialog("Apply the reviewed changes to this vault?", isPresented: $confirmApply, titleVisibility: .visible) {
-            Button("Apply Reviewed Changes", role: .destructive) { model.applyPruning() }
+            Button("Apply Reviewed Changes", role: .destructive) {
+                if model.authorityPolicyURL == nil { model.applyLocalPruning() }
+                else { model.applyPruning() }
+            }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This changes the working files in the exact packet shown here. Planisphere saves a recovery checkpoint first. Grapheine then verifies the signed permission and current files before applying. A second checkpoint is attempted after success.")
+            Text(model.authorityPolicyURL == nil
+                 ? "Apply only the Markdown changes shown here, keeping your chosen note and retiring the other reviewed members. Planisphere rechecks the proposal, saves a pre-change checkpoint, records the operation locally, and saves the result. Keep other editors idle. This is your local approval, not a signed authority decision."
+                 : "This changes the working files in the exact signed-policy packet shown here. Planisphere saves a recovery checkpoint first. Grapheine verifies signed permission and current files before applying. A second checkpoint is attempted after success.")
+        }
+        .confirmationDialog("Disconnect signed-policy review?", isPresented: $confirmDisconnectPolicy, titleVisibility: .visible) {
+            Button("Disconnect Policy") { model.forgetAuthorityPolicy() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This vault will use local review, where you choose a note to keep and explicitly approve changes in Planisphere. Existing policy files and signed records are retained. Local approvals do not satisfy the disconnected signed policy.")
         }
     }
 
@@ -47,16 +59,18 @@ struct PruningView: View {
                     .accessibilityIdentifier("scan-pruning")
             }
             HStack(spacing: 10) {
-                Image(systemName: "signature").foregroundStyle(.secondary)
                 if let policy = model.authorityPolicyURL {
-                    Text(policy.lastPathComponent).font(.caption).lineLimit(1).truncationMode(.middle)
+                    Image(systemName: "signature").foregroundStyle(.secondary)
+                    Text("Signed policy: \(policy.lastPathComponent)").font(.caption).lineLimit(1).truncationMode(.middle)
                         .help(policy.path)
                     Button("Change Policy…") { model.chooseAuthorityPolicy() }.font(.caption)
-                    Button("Forget") { model.forgetAuthorityPolicy() }.font(.caption)
-                        .help("Forget this location. The policy file is kept.")
+                    Button("Disconnect…") { confirmDisconnectPolicy = true }.font(.caption)
                 } else {
-                    Text("Authority policy optional for scanning").font(.caption).foregroundStyle(.secondary)
-                    Button("Choose Policy…") { model.chooseAuthorityPolicy() }.font(.caption)
+                    Label("Local review · your choice, exact changes", systemImage: "person.crop.circle.badge.checkmark")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Menu("Advanced") {
+                        Button("Connect Signed Policy…") { model.chooseAuthorityPolicy() }
+                    }.font(.caption).fixedSize(horizontal: true, vertical: false)
                 }
                 Spacer(minLength: 0)
             }
@@ -93,8 +107,9 @@ struct PruningView: View {
                         }
                         .buttonStyle(.plain).disabled(model.isBusy)
                     }
+                    if model.authorityPolicyURL != nil {
                     Divider()
-                    sectionLabel("AUTHORITY REVIEW")
+                    sectionLabel("SIGNED POLICY")
                     ForEach(scan.authority.questions) { question in
                         Button { model.selectPruningQuestion(question) } label: {
                             listRow(question.question, subtitle: "\(question.scope) · \(questionState(question))", symbol: question.hold == nil ? "signature" : "pause.circle",
@@ -105,6 +120,7 @@ struct PruningView: View {
                     if scan.authority.questions.isEmpty {
                         Text(scan.authority.message ?? "No authority questions were reported.")
                             .font(.caption).foregroundStyle(.secondary)
+                    }
                     }
                     Divider()
                     Text("Grapheine \(scan.engineVersion)").font(.caption2).foregroundStyle(.tertiary)
@@ -134,9 +150,11 @@ struct PruningView: View {
             }
             if let scan = model.pruningScan {
                 scanCoverage(scan)
+                if model.authorityPolicyURL != nil {
                 callout(authorityTitle(scan.authority.status),
                     text: scan.authority.message ?? "Review each question and its holds before preparing changes.",
                     symbol: "signature", color: scan.authority.status == "unavailable" ? .orange : .secondary)
+                }
             }
             if let group = model.selectedPruningGroup {
                 groupDetail(group)
@@ -164,9 +182,14 @@ struct PruningView: View {
             Text("Make room without losing the record.").font(.title2.weight(.semibold))
             Text("Grapheine nominates notes that may represent the same account. A matching name, few links, or an orphaned note is not permission to remove it.")
                 .font(.callout).foregroundStyle(.secondary).lineSpacing(4)
-            Text("Select a candidate to read its members, or an authority question to inspect its decision and holds.")
+            Text(model.authorityPolicyURL == nil
+                 ? "Select a candidate, read its members, and choose the note to keep. Review the proposed retirements and backlink updates before applying. Preservation holds can prevent a proposal."
+                 : "Select a candidate to read its members, or an authority question to inspect its decision and holds. This vault uses the connected signed policy.")
                 .font(.callout).foregroundStyle(.secondary).lineSpacing(4)
-            workflowRequirements
+            if model.authorityPolicyURL != nil { workflowRequirements }
+            else {
+                callout("Local review with recovery", text: "Ordinary vault folders can use local review. Planisphere preserves a Markdown checkpoint before applying and records the outcome on this Mac. Local approval does not create a signed authority record.", symbol: "clock.arrow.circlepath", color: .secondary)
+            }
         }
     }
 
@@ -201,7 +224,7 @@ struct PruningView: View {
                     if !scan.scope.limitations.isEmpty {
                         scopeLines("Coverage limits", scan.scope.limitations)
                     }
-                    Text("Authority review and preparation check their own requirements against the full working vault. A discovery result or its fingerprint does not establish write eligibility.")
+                    Text("Local preparation checks the reviewed Markdown scope and preservation requirements again. Connected signed policies keep their own write requirements. A discovery result alone does not approve changes.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 .padding(.top, 10)
@@ -228,12 +251,13 @@ struct PruningView: View {
         VStack(alignment: .leading, spacing: 17) {
             sectionLabel("CANDIDATE GROUP")
             Text(group.candidateKey).font(.title2.weight(.semibold)).textSelection(.enabled)
-            Text("These notes were nominated by matching account names or declared copies. Their contents and authority still need review. This group is not a deletion proposal.")
+            Text("These notes were nominated by matching account names or declared copies. Their contents and authority still need review. Matching names alone do not authorize retiring a note.")
                 .font(.callout).foregroundStyle(.secondary).lineSpacing(4)
             Text("\(group.members.count) members · \(group.declaredCopies) declared copies")
                 .font(.caption).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 7) {
                 ForEach(group.members, id: \.self) { path in
+                    HStack(alignment: .center, spacing: 8) {
                     Button { model.readPruningNote(path) } label: {
                         HStack(alignment: .top, spacing: 8) {
                             Image(systemName: "doc.text")
@@ -245,7 +269,38 @@ struct PruningView: View {
                         .background(Color.primary.opacity(model.selectedPruningNotePath == path ? 0.08 : 0.035), in: RoundedRectangle(cornerRadius: 7))
                     }
                     .buttonStyle(.plain).disabled(model.isBusy)
+                    if model.authorityPolicyURL == nil {
+                        Button(model.selectedKeeperPath == path ? "Keeping" : "Keep This Note") { model.chooseKeeper(path) }
+                            .buttonStyle(.bordered)
+                            .tint(model.selectedKeeperPath == path ? .accentColor : .secondary)
+                            .disabled(model.isBusy)
+                            .accessibilityIdentifier("keep-note-\(path)")
+                    }
+                    }
                 }
+            }
+            if model.authorityPolicyURL == nil {
+                if let hold = model.localReviewHold {
+                    callout("No changes prepared", text: hold, symbol: "pause.circle", color: .orange)
+                }
+                if let keeper = model.selectedKeeperPath {
+                    labeledText("Your note to keep", keeper)
+                } else {
+                    Text("Choose the note to keep. Reading a preview does not make this choice.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if let packet = model.localPruningPacket {
+                    localPacketDetail(packet)
+                } else {
+                    Button("Review Changes", systemImage: "doc.text.magnifyingglass") { model.prepareLocalPruning() }
+                        .buttonStyle(.borderedProminent).disabled(!model.canPrepareLocalPruning)
+                        .accessibilityIdentifier("prepare-local-pruning")
+                    Text("No files change during review. The proposal must preserve evidence and resolve affected links safely before it can be applied.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } else {
+                Text("This vault has a connected signed policy. Select its authority question to prepare an eligible signed-policy proposal; local review will not bypass its holds.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             if let path = model.selectedPruningNotePath {
                 Divider()
@@ -260,6 +315,49 @@ struct PruningView: View {
                         .font(.callout).foregroundStyle(.secondary)
                 }
             }
+        }
+    }
+
+    private func localPacketDetail(_ packet: LocalPruningPacket) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Divider()
+            sectionLabel("LOCAL CHANGE REVIEW")
+            Text("\(packet.changes.filter(\.isRetired).count) notes to retire · \(packet.changes.filter { !$0.isRetired }.count) files to update")
+                .font(.headline)
+            labeledText("Keep", packet.keepPath)
+            Text("This proposal affects the reviewed Markdown scope. Attachments, settings and excluded folders are outside its recovery checkpoint. Retirements remove files from the working folder after their pre-change versions are saved locally.")
+                .font(.caption).foregroundStyle(.secondary).lineSpacing(3)
+            if !packet.limitations.isEmpty {
+                scopeLines("Review limits", packet.limitations)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(packet.changes) { change in
+                    Button { model.selectedLocalChangePath = change.path } label: {
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: change.isRetired ? "minus.circle" : "pencil.circle")
+                                .foregroundStyle(change.isRetired ? Color.orange : Color.accentColor)
+                            Text(change.path).multilineTextAlignment(.leading)
+                            Spacer(minLength: 0)
+                            Text(change.isRetired ? "Retire" : "Update links").font(.caption).foregroundStyle(.secondary)
+                        }
+                        .padding(9)
+                        .background(Color.primary.opacity(model.selectedLocalChangePath == change.path ? 0.08 : 0.025), in: RoundedRectangle(cornerRadius: 6))
+                    }.buttonStyle(.plain).disabled(model.isBusy)
+                }
+            }
+            if let change = model.selectedLocalChange {
+                Text(change.path).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                sectionLabel("BEFORE")
+                sourceText(change.before ?? "No readable original.")
+                sectionLabel("AFTER")
+                sourceText(change.isRetired ? "This note will be retired from the working folder." : change.after ?? "No readable result.")
+            }
+            labeledText("Review fingerprint", packet.digest)
+            Button("Apply Reviewed Changes", systemImage: "checkmark.shield") { confirmApply = true }
+                .buttonStyle(.borderedProminent).disabled(!model.canApplyLocalPruning)
+                .accessibilityIdentifier("apply-local-pruning")
+            Text("Your next confirmation approves these exact local changes. Freshness and preservation are checked again; checkpoints and a local operation record support recovery. Keep other editors idle while applying.")
+                .font(.caption).foregroundStyle(.secondary).lineSpacing(3)
         }
     }
 
@@ -357,7 +455,7 @@ struct PruningView: View {
     }
 
     private var workflowRequirements: some View {
-        callout("Applying has additional requirements", text: "The current Grapheine protocol requires a clean local Git repository, an existing authority policy, a signed decision, and separate signed permission for exact changes. Local Git does not require GitHub. Planisphere does not initialize Git or create trust for you. Ordinary folders can still be scanned.", symbol: "lock.shield", color: .secondary)
+        callout("Connected signed-policy workflow", text: "This optional workflow keeps its existing requirements: a clean local Git repository, a signed decision, and separate signed permission for exact changes. Planisphere does not create trust or switch to local approval when a signed-policy proposal is held.", symbol: "lock.shield", color: .secondary)
     }
 
     private func questionState(_ question: PruningQuestion) -> String {

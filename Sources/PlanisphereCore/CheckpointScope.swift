@@ -16,6 +16,12 @@ public struct CheckpointScope: Codable, Equatable, Sendable {
     // A computed mode does not alter the checksums of existing manifests.
     public var mode: CheckpointMode { version == 2 ? .markdownOnly : .vaultContent }
 
+    public static func markdownOnly(excludedPaths: [String], sourceConfigurationSHA256: String?) throws -> CheckpointScope {
+        let scope = CheckpointScope(excludedPaths: excludedPaths, sourceConfigurationSHA256: sourceConfigurationSHA256, mode: .markdownOnly)
+        try scope.validate()
+        return scope
+    }
+
     internal init(excludedPaths: [String], sourceConfigurationSHA256: String?, mode: CheckpointMode = .vaultContent) {
         version = mode == .markdownOnly ? 2 : 1
         self.excludedPaths = excludedPaths

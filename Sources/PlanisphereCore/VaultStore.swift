@@ -1,14 +1,16 @@
 import Foundation
 import Darwin
 
-/// Local, explicit version history. No networking, encryption-in-place or source
-/// rewriting occurs. The OS lock also serializes separate application processes.
+/// Local, explicit version history and separately reviewed Markdown mutations.
+/// The OS lock also serializes separate application processes.
 public actor VaultStore {
     public nonisolated let rootURL: URL
     // Deterministic fault injection for verifying concurrent-editor rejection.
     // Internal only; application and managed adapters cannot install this hook.
     private var captureValidationHook: (@Sendable () throws -> Void)?
     internal func setCaptureValidationHook(_ hook: (@Sendable () throws -> Void)?) { captureValidationHook = hook }
+    private var mutationStepHook: (@Sendable (Int, String) throws -> Void)?
+    internal func setMutationStepHook(_ hook: (@Sendable (Int, String) throws -> Void)?) { mutationStepHook = hook }
 
     private struct Registry: Codable { var formatVersion = 1; var vaults: [VaultRecord] = [] }
     private struct Head: Codable { var formatVersion = 1; var checkpointID: UUID? }
@@ -450,7 +452,7 @@ public actor VaultStore {
         return data
     }
 
-    private func captureAndPublish(_ record: VaultRecord, message: String, scope: CheckpointScope?, root: VaultFS.Handle) throws -> Checkpoint {
+    private func captureAndPublish(_ record: VaultRecord, message: String, scope: CheckpointScope?, root: VaultFS.Handle, expectedFiles: [String: String]? = nil) throws -> Checkpoint {
         guard message.utf8.count <= 65536 else { throw VaultStoreError.invalid("Checkpoint message is too long.") }
         let previous = try history(record.id, root: root).first
         let source = try VaultFS.directory(sourceURL(record.url))
@@ -462,6 +464,11 @@ public actor VaultStore {
         let second = try inventory(secondSource, root: root, persist: false, scope: scope)
         try scope?.verifySource(secondSource)
         guard first.entries == second.entries, first.stamps == second.stamps else { throw VaultStoreError.changedDuringCapture }
+        if let expectedFiles {
+            guard Self.markdownFiles(first.entries) == expectedFiles else {
+                throw VaultStoreError.invalid("Markdown changed after review. Review a fresh pruning plan; no checkpoint was published for this state.")
+            }
+        }
         let formatVersion = scope != nil || first.entries.contains(where: { $0.kind == .symbolicLink }) ? 2 : 1
         let version = Checkpoint(formatVersion: formatVersion, vaultID: record.id, parentID: previous?.id, message: message, entries: first.entries, restoredFrom: record.restoredFrom, captureScope: scope)
         try publish(version, root: root)
@@ -584,5 +591,241 @@ public actor VaultStore {
         let result = try VaultFS.stream(source, destination: file.fd, limit: entry.size)
         guard result.digest == digest, result.size == entry.size else { throw VaultStoreError.corrupt("file object checksum mismatch during copy") }
         try VaultFS.sync(file.fd)
+    }
+}
+
+extension VaultStore {
+    private struct MutationJournal: Codable {
+        var formatVersion = 1
+        let plan: MarkdownMutationPlan
+        var receipt: MarkdownMutationReceipt
+    }
+
+    private static func markdownFiles(_ entries: [FileEntry]) -> [String: String] {
+        Dictionary(uniqueKeysWithValues: entries.filter { $0.kind == .file }.map { ($0.path, $0.digest!) })
+    }
+
+    private static func recoveryName(_ plan: MarkdownMutationPlan, _ index: Int) -> String {
+        ".planisphere-recovery-" + plan.id.uuidString + "-" + String(index)
+    }
+
+    private static func recoveryPaths(_ plan: MarkdownMutationPlan) -> [String] {
+        plan.changes.enumerated().map { index, change in
+            URL(fileURLWithPath: plan.vaultPath).appendingPathComponent(change.path)
+                .deletingLastPathComponent().appendingPathComponent(recoveryName(plan, index)).path
+        }
+    }
+
+    private static func expectedAfter(_ plan: MarkdownMutationPlan) -> [String: String] {
+        var files = plan.expectedFiles
+        for change in plan.changes { files[change.path] = change.after.map(VaultFS.hash) }
+        return files
+    }
+
+    /// The caller must show the exact plan and obtain local human approval first.
+    /// This records local approval provenance, not an externally signed permission.
+    public func applyMarkdownMutation(_ plan: MarkdownMutationPlan) throws -> MarkdownMutationReceipt {
+        try operation { root in
+            try plan.validate()
+            let vault = try record(plan.vaultID, root: root)
+            guard vault.path == plan.vaultPath else { throw VaultStoreError.invalid("The reviewed plan belongs to a different vault path.") }
+            let vaultFolder = try vaultDirectory(vault.id, root: root)
+            let journals = try VaultFS.childDirectory(vaultFolder, "mutations", create: true)
+            let journalName = plan.id.uuidString + ".json"
+            if try VaultFS.entryInfo(journals, journalName) != nil {
+                let previous: MutationJournal = try Self.read(journalName, in: journals)
+                try validateJournal(previous, name: journalName, vault: vault, root: root)
+                guard previous.plan == plan else { throw VaultStoreError.invalid("This operation ID is already bound to a different reviewed plan.") }
+                if previous.receipt.status == .completed { return previous.receipt }
+                throw VaultStoreError.invalid("This pruning operation was interrupted. Inspect its recovery checkpoint and files, then prepare a fresh review. It will not be replayed.")
+            }
+            // Validate all prior receipts before adding another mutation. Pending work
+            // is never resumed automatically, and its originals remain available.
+            let previousReceipts = try mutationReceipts(vault: vault, root: root)
+            guard previousReceipts.allSatisfy({ $0.status == .completed || $0.recoveryAcknowledgedAt != nil }) else {
+                throw VaultStoreError.invalid("Inspect and acknowledge the interrupted pruning recovery before reviewing another change. No source files were changed.")
+            }
+            let before = try captureAndPublish(vault, message: "Before locally approved pruning", scope: plan.scope, root: root, expectedFiles: plan.expectedFiles)
+            var journal = MutationJournal(plan: plan, receipt: MarkdownMutationReceipt(
+                id: plan.id, vaultID: vault.id, planDigest: plan.digest, beforeCheckpointID: before.id,
+                afterCheckpointID: nil, startedAt: Date(), finishedAt: nil, status: .pending, recoveryAcknowledgedAt: nil,
+                changedPaths: plan.changes.map(\.path), appliedPaths: [], recoveryPaths: Self.recoveryPaths(plan), error: nil))
+            // The immutable precheckpoint and durable pending receipt precede every
+            // source write, including creation of replacement staging files.
+            try Self.write(journal, to: journalName, in: journals, replace: false)
+            do {
+                try mutationStepHook?(-1, "journal")
+                let source = try VaultFS.directory(sourceURL(vault.url))
+                try plan.scope.verifySource(source)
+                guard Self.markdownFiles(try inventory(source, root: root, persist: false, scope: plan.scope).entries) == plan.expectedFiles else {
+                    throw VaultStoreError.changedDuringCapture
+                }
+                for (index, change) in plan.changes.enumerated() {
+                    let reopened = try VaultFS.directory(sourceURL(vault.url))
+                    guard try VaultFS.sameDirectory(source, reopened) else { throw VaultStoreError.changedDuringCapture }
+                    try plan.scope.verifySource(reopened)
+                    let components = change.path.split(separator: "/").map(String.init)
+                    var parent = reopened
+                    for component in components.dropLast() { parent = try VaultFS.childDirectory(parent, component) }
+                    let expectedParent = vault.url.appendingPathComponent(change.path).deletingLastPathComponent().path
+                    guard try VaultFS.canonicalURL(parent).path == expectedParent else { throw VaultStoreError.changedDuringCapture }
+                    let name = components.last!, recovery = Self.recoveryName(plan, index)
+                    guard try VaultFS.entryInfo(parent, recovery) == nil else {
+                        throw VaultStoreError.invalid("A recovery path already exists. It has been preserved.")
+                    }
+                    let original = try Self.readMutationFile(parent, name)
+                    guard original.data == change.before else { throw VaultStoreError.changedDuringCapture }
+                    if let after = change.after {
+                        try VaultFS.atomicData(after, parent: parent, name: recovery, replace: false)
+                        let staged = try VaultFS.Handle(openat(parent.fd, recovery, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC))
+                        guard fchmod(staged.fd, original.info.st_mode & 0o777) == 0 else { throw VaultFS.unavailable("Could not preserve note permissions") }
+                        try VaultFS.sync(staged.fd)
+                    }
+                    try mutationStepHook?(index, "beforeExchange")
+                    let checked = try Self.readMutationFile(parent, name)
+                    guard checked.data == change.before, VaultFS.Stamp(checked.info) == VaultFS.Stamp(original.info),
+                          try VaultFS.canonicalURL(parent).path == expectedParent else { throw VaultStoreError.changedDuringCapture }
+                    try mutationStepHook?(index, "exchangeBoundary")
+                    if change.after != nil {
+                        guard renameatx_np(parent.fd, recovery, parent.fd, name, UInt32(RENAME_SWAP)) == 0 else {
+                            throw VaultFS.unavailable("Could not exchange the reviewed note")
+                        }
+                    } else {
+                        guard renameatx_np(parent.fd, name, parent.fd, recovery, UInt32(RENAME_EXCL)) == 0 else {
+                            throw VaultFS.unavailable("Could not retain the retired note")
+                        }
+                    }
+                    try VaultFS.sync(parent.fd)
+                    try mutationStepHook?(index, "afterExchange")
+                    // Inspect what was actually displaced by the atomic operation.
+                    // Its inode stays linked indefinitely, preserving late writes by
+                    // editors with an old descriptor even after this check completes.
+                    let displaced = try Self.readMutationFile(parent, recovery)
+                    guard displaced.data == change.before,
+                          displaced.info.st_dev == checked.info.st_dev,
+                          displaced.info.st_ino == checked.info.st_ino else { throw VaultStoreError.changedDuringCapture }
+                    journal.receipt.appliedPaths.append(change.path)
+                    try Self.write(journal, to: journalName, in: journals, replace: true)
+                }
+                try mutationStepHook?(plan.changes.count, "beforeAfterCheckpoint")
+                let after = try captureAndPublish(vault, message: "After locally approved pruning", scope: plan.scope,
+                                                 root: root, expectedFiles: Self.expectedAfter(plan))
+                journal.receipt.afterCheckpointID = after.id
+                journal.receipt.status = .completed
+                journal.receipt.finishedAt = Date()
+                try Self.write(journal, to: journalName, in: journals, replace: true)
+                let committed: MutationJournal = try Self.read(journalName, in: journals)
+                return committed.receipt
+            } catch {
+                journal.receipt.status = .interrupted
+                journal.receipt.error = String(error.localizedDescription.prefix(4096))
+                // Failure to update leaves the earlier durable pending journal; the
+                // next reader treats pending as interrupted, without changing notes.
+                try? Self.write(journal, to: journalName, in: journals, replace: true)
+                throw VaultStoreError.unavailable("Pruning stopped and may be partly applied. Recovery checkpoint \(before.id.uuidString) and retained recovery files are available. No automatic rollback was attempted. \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// A pending receipt found under the store lock means its writer ended before
+    /// completion. Recovery is inspection/Restore Copy, never blind in-place replay.
+    public func mutationReceipts(vaultID: UUID) throws -> [MarkdownMutationReceipt] {
+        try operation { root in try mutationReceipts(vault: record(vaultID, root: root), root: root) }
+    }
+
+    /// Explicit local confirmation that recovery has been inspected. This does not
+    /// claim completion, restore notes, delete evidence, or replay the old operation.
+    public func acknowledgeMutationRecovery(vaultID: UUID, operationID: UUID) throws -> MarkdownMutationReceipt {
+        try operation { root in
+            let vault = try record(vaultID, root: root)
+            _ = try mutationReceipts(vault: vault, root: root)
+            let journals = try VaultFS.childDirectory(vaultDirectory(vault.id, root: root), "mutations")
+            let name = operationID.uuidString + ".json"
+            var journal: MutationJournal = try Self.read(name, in: journals)
+            try validateJournal(journal, name: name, vault: vault, root: root)
+            guard journal.receipt.status == .interrupted else {
+                throw VaultStoreError.invalid("Only interrupted pruning recovery can be acknowledged.")
+            }
+            if journal.receipt.recoveryAcknowledgedAt == nil {
+                journal.receipt.recoveryAcknowledgedAt = Date()
+                try Self.write(journal, to: name, in: journals, replace: true)
+            }
+            let committed: MutationJournal = try Self.read(name, in: journals)
+            return committed.receipt
+        }
+    }
+
+    private func mutationReceipts(vault: VaultRecord, root: VaultFS.Handle) throws -> [MarkdownMutationReceipt] {
+        let folder = try vaultDirectory(vault.id, root: root)
+        guard try VaultFS.entryInfo(folder, "mutations") != nil else { return [] }
+        let journals = try VaultFS.childDirectory(folder, "mutations")
+        var result: [MarkdownMutationReceipt] = []
+        for name in try VaultFS.names(journals) where !name.hasPrefix(".pending-") {
+            var journal: MutationJournal = try Self.read(name, in: journals)
+            try validateJournal(journal, name: name, vault: vault, root: root)
+            if journal.receipt.status == .pending {
+                journal.receipt.status = .interrupted
+                journal.receipt.error = "The app stopped before pruning recorded completion. Inspect the recovery checkpoint and retained files before preparing another change."
+                try Self.write(journal, to: name, in: journals, replace: true)
+            }
+            result.append(journal.receipt)
+        }
+        return result.sorted { $0.startedAt > $1.startedAt }
+    }
+
+    private func validateJournal(_ journal: MutationJournal, name: String, vault: VaultRecord, root: VaultFS.Handle) throws {
+        try journal.plan.validate()
+        let receipt = journal.receipt
+        guard journal.formatVersion == 1, name == journal.plan.id.uuidString + ".json",
+              journal.plan.vaultID == vault.id, journal.plan.vaultPath == vault.path,
+              receipt.id == journal.plan.id, receipt.vaultID == vault.id, receipt.planDigest == journal.plan.digest,
+              receipt.startedAt.timeIntervalSince1970.isFinite,
+              receipt.changedPaths == journal.plan.changes.map(\.path),
+              receipt.recoveryPaths == Self.recoveryPaths(journal.plan),
+              receipt.appliedPaths == Array(receipt.changedPaths.prefix(receipt.appliedPaths.count)) else {
+            throw VaultStoreError.corrupt("invalid pruning recovery journal")
+        }
+        if let acknowledged = receipt.recoveryAcknowledgedAt {
+            guard receipt.status == .interrupted, acknowledged.timeIntervalSince1970.isFinite else {
+                throw VaultStoreError.corrupt("invalid recovery acknowledgment")
+            }
+        }
+        let versions = try history(vault.id, root: root)
+        let before = try checkpoint(receipt.beforeCheckpointID, in: versions)
+        guard before.captureScope == journal.plan.scope, Self.markdownFiles(before.entries) == journal.plan.expectedFiles else {
+            throw VaultStoreError.corrupt("pruning recovery checkpoint does not match the reviewed plan")
+        }
+        if let afterID = receipt.afterCheckpointID {
+            let after = try checkpoint(afterID, in: versions)
+            guard after.captureScope == journal.plan.scope, Self.markdownFiles(after.entries) == Self.expectedAfter(journal.plan) else {
+                throw VaultStoreError.corrupt("pruning completion checkpoint does not match the plan")
+            }
+        }
+        if receipt.status == .completed {
+            guard receipt.afterCheckpointID != nil, receipt.finishedAt?.timeIntervalSince1970.isFinite == true,
+                  receipt.appliedPaths == receipt.changedPaths else { throw VaultStoreError.corrupt("incomplete pruning completion receipt") }
+        }
+    }
+
+    private static func readMutationFile(_ parent: VaultFS.Handle, _ name: String) throws -> (data: Data, info: stat) {
+        let file = try VaultFS.Handle(openat(parent.fd, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC))
+        let before = try VaultFS.info(file)
+        guard before.st_mode & S_IFMT == S_IFREG, before.st_size >= 0, before.st_size <= 8 * 1024 * 1024 else {
+            throw VaultStoreError.invalid("A reviewed note is no longer a supported regular file.")
+        }
+        var data = Data(), buffer = [UInt8](repeating: 0, count: 65536)
+        while true {
+            let count = buffer.withUnsafeMutableBytes { Darwin.read(file.fd, $0.baseAddress, $0.count) }
+            if count < 0 && errno == EINTR { continue }
+            guard count >= 0 else { throw VaultFS.unavailable("Could not verify a reviewed note") }
+            if count == 0 { break }
+            guard data.count + count <= 8 * 1024 * 1024 else { throw VaultStoreError.changedDuringCapture }
+            data.append(contentsOf: buffer.prefix(count))
+        }
+        guard VaultFS.Stamp(before) == VaultFS.Stamp(try VaultFS.info(file)), data.count == before.st_size,
+              let named = try VaultFS.entryInfo(parent, name), VaultFS.Stamp(named) == VaultFS.Stamp(before) else {
+            throw VaultStoreError.changedDuringCapture
+        }
+        return (data, before)
     }
 }

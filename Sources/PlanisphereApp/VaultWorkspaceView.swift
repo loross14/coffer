@@ -20,6 +20,10 @@ struct VaultWorkspaceView: View {
             CheckpointReviewView(model: model)
                 .interactiveDismissDisabled(model.isBusy)
         }
+        .sheet(isPresented: $model.localRecoveryReviewPresented) {
+            LocalPruningRecoveryView(model: model)
+                .interactiveDismissDisabled(model.isBusy)
+        }
         .alert("Planisphere needs attention", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }
@@ -38,6 +42,29 @@ struct VaultWorkspaceView: View {
 
     private var workspace: some View {
             VStack(spacing: 0) {
+                if let receipt = model.unresolvedLocalMutation {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("A local pruning attempt needs recovery review.").font(.callout.weight(.semibold))
+                            Text("Receipt \(receipt.id.uuidString). Inspect the working folder and pre-change checkpoint before retrying.")
+                                .font(.caption).textSelection(.enabled)
+                            if let error = receipt.error { Text(error).font(.caption).lineLimit(3) }
+                        }
+                        Spacer(minLength: 4)
+                        Button("Review Recovery…") { model.localRecoveryReviewPresented = true }.disabled(model.isBusy)
+                    }
+                    .padding(.horizontal, 22).padding(.vertical, 12)
+                    .background(Color.orange.opacity(0.08)).fixedSize(horizontal: false, vertical: true)
+                } else if let error = model.localMutationReadError {
+                    HStack(alignment: .top, spacing: 12) {
+                        Text(error).font(.caption).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button("Retry Recovery Records") { model.retryHistory() }.disabled(model.isBusy)
+                    }
+                    .padding(.horizontal, 22).padding(.vertical, 12)
+                    .background(Color.orange.opacity(0.08)).fixedSize(horizontal: false, vertical: true)
+                }
                 if let warning = model.pruningRecoveryWarning {
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)

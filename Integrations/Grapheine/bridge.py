@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Local native-app adapter to the pinned Grapheine authority workflow.
+"""Local native-app adapter to pinned Grapheine discovery and review checks.
 
-No keys, trust policy, Git repository or remote upload are created here. Scan is
-read-only. Preparation/application retain the engine's G1–G5 checks and require
-an externally provisioned policy and externally signed exact-write receipt.
+No keys, trust policy, Git repository or remote upload are created here. Local
+proposals and verification are read-only; the native store performs separately
+confirmed changes with checkpoint recovery. The optional legacy signed workflow
+retains its externally provisioned policy and exact-write receipt requirements.
 """
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 import codecs
 from datetime import datetime, timezone
@@ -20,6 +22,7 @@ import re
 import stat
 import sys
 import types
+import unicodedata
 
 sys.dont_write_bytecode = True
 ENGINE_COMMIT = "c013207c1fb1140fd20819fb61e1b7a25980ea88"
@@ -220,7 +223,7 @@ def control_pins(authority, ctx):
 
 def authority_scan(authority, policy, root):
     if not policy:
-        return {"status": "notConfigured", "message": "No authority policy selected. Candidate matches do not authorize pruning.", "questions": []}
+        return {"status": "notConfigured", "message": "Local review is available. Choose the note to keep, then review and approve the exact changes. Matching names alone do not authorize pruning.", "questions": []}
     try:
         with policy_environment(policy, root):
             ctx = context(authority, policy, root)
@@ -247,7 +250,8 @@ def authority_scan(authority, policy, root):
         return {"status": "unavailable", "message": str(exc), "questions": []}
 
 
-# Discovery deliberately has a smaller read scope than strict write readiness.
+# Discovery and local review cover Markdown. Legacy signed writes retain their
+# separate full-folder inventory contract.
 MAX_NOTE_BYTES = 8 * 1024 * 1024
 MAX_DISCOVERY_BYTES = 256 * 1024 * 1024
 MAX_DISCOVERY_NOTES = 20_000
@@ -277,8 +281,8 @@ def discovery_config(root):
             info = os.stat("app.json", dir_fd=configfd, follow_symlinks=False)
         except FileNotFoundError:
             return {"identity": "absent", "applied": [], "unsupported": []}
-        if not stat.S_ISREG(info.st_mode) or info.st_size > 1024 * 1024:
-            raise BridgeError("Obsidian app.json must be a regular configuration file no larger than 1 MiB.")
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 2 * 1024 * 1024:
+            raise BridgeError("Obsidian app.json must be a regular configuration file no larger than 2 MiB.")
         descriptor = os.open("app.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=configfd)
         try:
             if stamp(info) != stamp(os.fstat(descriptor)):
@@ -289,8 +293,8 @@ def discovery_config(root):
                 if not chunk:
                     break
                 total += len(chunk)
-                if total > 1024 * 1024:
-                    raise BridgeError("Obsidian app.json exceeds the 1 MiB configuration limit.")
+                if total > 2 * 1024 * 1024:
+                    raise BridgeError("Obsidian app.json exceeds the 2 MiB configuration limit.")
                 chunks.append(chunk)
             if stamp(info) != stamp(os.fstat(descriptor)):
                 raise BridgeError("Obsidian exclusion settings changed during reading. Scan again.")
@@ -304,15 +308,16 @@ def discovery_config(root):
     try:
         document = json.loads(raw.decode("utf-8"))
         filters = document.get("userIgnoreFilters", [])
-        if not isinstance(filters, list) or len(filters) > 10_000:
-            raise ValueError("userIgnoreFilters must be a list with at most 10,000 entries")
+        if not isinstance(filters, list) or len(filters) > 4096:
+            raise ValueError("userIgnoreFilters must be a list with at most 4,096 entries")
     except (UnicodeError, ValueError, AttributeError) as exc:
         raise BridgeError("Obsidian exclusion settings could not be read safely: " + str(exc)) from exc
     applied, unsupported = [], []
     for rule in filters:
-        if (not isinstance(rule, str) or not rule or len(rule) > 4096
-                or rule.startswith(("/", "~")) or any(c in rule for c in "\\*?[]{}()|^$\0\r\n")
-                or any(part in ("", ".", "..") for part in rule.rstrip("/").split("/"))):
+        if (not isinstance(rule, str) or not rule or len(rule.encode("utf-8")) > 4096
+                or rule.startswith("/") or any(c in rule for c in "\\*?[]{}|^$")
+                or any(unicodedata.category(c) in ("Cc", "Cf") for c in rule)
+                or any(part in ("", ".", "..") for part in (rule[:-1] if rule.endswith("/") else rule).split("/"))):
             label = rule if isinstance(rule, str) and rule else json.dumps(rule, ensure_ascii=False)
             unsupported.append(label[:4096])
         else:
@@ -321,11 +326,11 @@ def discovery_config(root):
             "applied": sorted(set(applied)), "unsupported": sorted(set(unsupported))}
 
 
-def discovery_inventory(root, graph, destination=None):
+def discovery_inventory(root, graph, destination=None, *, strict=False):
     root = safe_path(root, directory=True)
     config = discovery_config(root)
     excluded, excluded_count, excluded_digest = [], 0, hashlib.sha256()
-    files, stamps, directory_ids = {}, {}, {}
+    files, stamps, directory_ids, canvas_paths = {}, {}, {}, []
     total_bytes, visited = 0, 0
     exact_rules = {rule.rstrip("/") for rule in config["applied"]}
 
@@ -352,6 +357,8 @@ def discovery_inventory(root, graph, destination=None):
             try:
                 info = os.stat(name, dir_fd=fd, follow_symlinks=False)
             except PermissionError:
+                if strict:
+                    raise BridgeError("Cannot verify the Markdown review scope: " + relative)
                 exclude(relative, "unreadable entry")
                 continue
             except FileNotFoundError as exc:
@@ -370,6 +377,8 @@ def discovery_inventory(root, graph, destination=None):
                 try:
                     child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
                 except PermissionError:
+                    if strict:
+                        raise BridgeError("Cannot verify the Markdown review scope: " + relative)
                     exclude(relative, "unreadable directory", True)
                     continue
                 try:
@@ -379,6 +388,8 @@ def discovery_inventory(root, graph, destination=None):
                 finally:
                     os.close(child)
             elif not name.endswith(".md"):
+                if name.endswith(".canvas"):
+                    canvas_paths.append(relative)
                 exclude(relative, "non-Markdown file")
             else:
                 if info.st_size > MAX_NOTE_BYTES:
@@ -388,6 +399,8 @@ def discovery_inventory(root, graph, destination=None):
                 try:
                     child = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
                 except PermissionError:
+                    if strict:
+                        raise BridgeError("Cannot verify the Markdown review scope: " + relative)
                     exclude(relative, "unreadable Markdown")
                     continue
                 output = None
@@ -444,7 +457,8 @@ def discovery_inventory(root, graph, destination=None):
              "appliedFilters": config["applied"][:MAX_SCOPE_ITEMS],
              "unsupportedFilters": config["unsupported"][:MAX_SCOPE_ITEMS], "limitations": limitations}
     return {"files": files, "stamps": stamps, "directories": directory_ids,
-            "config": config, "scope": scope, "excludedIdentity": excluded_digest.hexdigest()}
+            "config": config, "scope": scope, "excludedIdentity": excluded_digest.hexdigest(),
+            "canvasPaths": canvas_paths}
 
 
 @contextlib.contextmanager
@@ -525,6 +539,12 @@ def scoped_graph(graph, root, stage, included):
         graph._links_cache.clear()
 
 
+def discovery_fingerprint(inventory):
+    return digest({"files": inventory["files"], "config": inventory["config"],
+                   "scope": inventory["scope"], "excludedIdentity": inventory["excludedIdentity"],
+                   "canvasPaths": inventory["canvasPaths"]})
+
+
 def scan(graph, authority, root, policy=None):
     import tempfile
     root = safe_path(root, directory=True)
@@ -558,8 +578,97 @@ def scan(graph, authority, root, policy=None):
             "vaultPath": str(root), "notes": accounts["notes"],
             "totalGroups": accounts["candidate_group_count"], "groups": groups,
             "diagnostics": diagnostics, "authority": auth, "scope": before["scope"],
-            "fingerprint": digest({"files": before["files"], "config": before["config"],
-                                   "scope": before["scope"], "excludedIdentity": before["excludedIdentity"]})}
+            "fingerprint": discovery_fingerprint(before)}
+
+
+LOCAL_SCHEMA = "planisphere-local-prune-v1"
+LOCAL_LIMITATIONS = [
+    "You choose the note to keep and approve these exact changes. This local review is not an externally signed authority decision.",
+    "Only included Markdown is reviewed and changed. Links from excluded folders, other vaults, attachments, or external applications are not checked or updated.",
+    "Grapheine checks supported links, citations, and holds. It does not prove that the kept note preserves every meaning; read the retired notes before approving.",
+    "Planisphere saves Markdown checkpoints before and after applying. Close other editors and sync during application; interrupted operations retain recovery information.",
+]
+
+
+def local_helper(filename):
+    # Load our companion from the app's own resource directory, never a vault.
+    guard_path = Path(__file__).resolve().with_name(filename)
+    namespace = {"__name__": "planisphere_" + filename.removesuffix(".py")}
+    exec(compile(read_regular(guard_path), str(guard_path), "exec"), namespace)
+    return namespace
+
+
+def prepare_local(graph, authority, root, members, keep, fingerprint):
+    """Read-only local proposal. The native store owns recovery and all writes.
+
+    This deliberately does not manufacture a signed decision, permission, Git
+    HEAD, or success record for the independently governed settlement protocol.
+    """
+    import tempfile
+    root = safe_path(root, directory=True)
+    if (not isinstance(members, list) or not 2 <= len(members) <= 1000
+            or not all(isinstance(n, str) for n in members)
+            or len(set(members)) != len(members) or keep not in members):
+        raise BridgeError("Choose one complete candidate group and explicitly select its note to keep.")
+    if not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+        raise BridgeError("Scan this vault before preparing local changes.")
+    with tempfile.TemporaryDirectory(prefix=".planisphere-local-review-") as temporary:
+        stage = Path(temporary).resolve()
+        before = discovery_inventory(root, graph, destination=stage, strict=True)
+        if discovery_fingerprint(before) != fingerprint:
+            raise BridgeError("The vault or review scope changed since scanning. Scan again.")
+        if not set(members).issubset(before["files"]):
+            raise BridgeError("Every candidate must be a current included Markdown note.")
+        if before["canvasPaths"]:
+            raise BridgeError("Canvas links need preservation review before pruning: " + before["canvasPaths"][0])
+        texts = {name: (stage / name).read_bytes().decode("utf-8") for name in before["files"]}
+        retired_aliases = []
+        for name in set(members) - {keep}:
+            _, metadata = graph.read_note(stage / name)
+            retired_aliases.extend(graph.fm_list(metadata, "alias") + graph.fm_list(metadata, "aliases"))
+        guard = local_helper("local_guard.py")
+        guard["validate_local_markdown"](texts, root, members=members, retired=set(members)-{keep}, retired_aliases=retired_aliases)
+        attachment_references = guard["local_attachment_references"]
+        kept_attachments = attachment_references(texts[keep], keep)
+        for retired in set(members) - {keep}:
+            if attachment_references(texts[retired], retired) - kept_attachments:
+                raise BridgeError("Unique attachment references would leave the active note: " + retired)
+        with scoped_graph(graph, root, stage, before["files"]):
+            accounts = graph._accounts_payload([stage], top=MAX_GROUPS, include_generic=False)
+            if not any(set(g["members"]) == set(members) for g in accounts["candidate_groups"]):
+                raise BridgeError("The selected members are not one complete current candidate group. Scan again.")
+            changes = local_helper("local_plan.py")["make_local_changes"](graph, authority, stage, members, keep, set(before["files"]))
+            preserve_code_examples(authority, {"packet": {"changes": changes}}, stage)
+        if not changes or set(name for name, after in changes.items() if after is None) != set(members) - {keep}:
+            raise BridgeError("The proposed retirements do not match the reviewed choice.")
+        if discovery_inventory(root, graph, strict=True) != before:
+            raise BridgeError("Vault or exclusions changed during preparation. Scan and review again.")
+        payload = {"schema": LOCAL_SCHEMA, "engineCommit": ENGINE_COMMIT,
+                   "vault": str(root), "value": keep, "members": sorted(members),
+                   "files": before["files"], "fingerprint": fingerprint,
+                   "scope": {"version": 2, "excludedPaths": before["config"]["applied"],
+                             "sourceConfigurationSHA256": None if before["config"]["identity"] == "absent" else before["config"]["identity"]},
+                   "changes": changes,
+                   "originals": {name: base64.b64encode((stage / name).read_bytes()).decode("ascii") for name in changes},
+                   "limitations": LOCAL_LIMITATIONS}
+    packet = {"packet": payload, "digest": digest(payload)}
+    if len(canonical(packet)) > MAX_JSON_BYTES:
+        raise BridgeError("Prepared changes exceed the supported 32 MiB review limit.")
+    return packet
+
+
+def verify_local(graph, authority, root, packet_path):
+    packet_path = safe_path(packet_path)
+    if authority.inside(packet_path, root):
+        raise BridgeError("The reviewed packet must be outside the working vault.")
+    packet = json.loads(read_regular(packet_path))
+    payload = packet.get("packet", {})
+    if payload.get("schema") != LOCAL_SCHEMA or payload.get("vault") != str(root):
+        raise BridgeError("The reviewed changes belong to another vault or unsupported review format.")
+    fresh = prepare_local(graph, authority, root, payload.get("members"), payload.get("value"), payload.get("fingerprint"))
+    if fresh != packet:
+        raise BridgeError("The reviewed changes were modified or are stale. Prepare a new review.")
+    return fresh
 
 
 # Keep code examples byte-exact. The current engine's settlement parser can
@@ -630,7 +739,7 @@ def main(argv=None):
         def error(self, message):
             raise BridgeError(message)
     parser = JSONArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["scan", "prepare", "apply"])
+    parser.add_argument("action", choices=["scan", "prepare", "apply", "prepare-local", "verify-local"])
     parser.add_argument("--engine-root", required=True)
     parser.add_argument("--vault", required=True)
     parser.add_argument("--policy")
@@ -638,6 +747,9 @@ def main(argv=None):
     parser.add_argument("--question")
     parser.add_argument("--packet")
     parser.add_argument("--receipt")
+    parser.add_argument("--members")
+    parser.add_argument("--keep")
+    parser.add_argument("--fingerprint")
     try:
         args = parser.parse_args(argv)
         root = safe_path(args.vault, directory=True)
@@ -646,6 +758,17 @@ def main(argv=None):
             graph, authority = load_engine(args.engine_root)
             if args.action == "scan":
                 result = scan(graph, authority, root, args.policy)
+            elif args.action in ("prepare-local", "verify-local"):
+                if args.policy:
+                    raise BridgeError("A configured signed policy cannot be bypassed by a local review request.")
+                if args.action == "prepare-local":
+                    if not args.members or not args.keep or not args.fingerprint:
+                        raise BridgeError("Local preparation requires the complete group, chosen note, and current scan.")
+                    result = prepare_local(graph, authority, root, json.loads(args.members), args.keep, args.fingerprint)
+                else:
+                    if not args.packet:
+                        raise BridgeError("Verification requires the exact reviewed packet.")
+                    result = verify_local(graph, authority, root, args.packet)
             else:
                 if not args.policy:
                     raise BridgeError("Select an externally provisioned authority policy first.")

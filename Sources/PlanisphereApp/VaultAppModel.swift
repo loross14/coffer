@@ -45,6 +45,13 @@ final class VaultAppModel {
     var pruningNoteError: String?
     var authorityPolicyURL: URL?
     var pruningPacket: PruningPacket?
+    var localPruningPacket: LocalPruningPacket?
+    var localReviewHold: String?
+    var selectedKeeperPath: String?
+    var selectedLocalChangePath: String?
+    var localMutationReceipts: [MarkdownMutationReceipt] = []
+    var localMutationReadError: String?
+    var localRecoveryReviewPresented = false
     var selectedPruningChangePath: String?
     var permissionReceiptURL: URL?
     var isBusy = false
@@ -77,8 +84,23 @@ final class VaultAppModel {
     var selectedPruningGroup: PruningGroup? { pruningScan?.groups.first { $0.id == selectedPruningGroupID } }
     var selectedPruningQuestion: PruningQuestion? { pruningScan?.authority.questions.first { $0.id == selectedPruningQuestionID } }
     var selectedPruningChange: PruningChange? { pruningPacket?.changes.first { $0.path == selectedPruningChangePath } }
+    var selectedLocalChange: PruningChange? { localPruningPacket?.changes.first { $0.path == selectedLocalChangePath } }
+    var unresolvedLocalMutation: MarkdownMutationReceipt? {
+        localMutationReceipts.first { $0.status != .completed && $0.recoveryAcknowledgedAt == nil }
+    }
+    var canPrepareLocalPruning: Bool {
+        !isBusy && authorityPolicyURL == nil && pruningError == nil &&
+        selectedKeeperPath.map { selectedPruningGroup?.members.contains($0) == true } == true
+    }
+    var canApplyLocalPruning: Bool {
+        !isBusy && authorityPolicyURL == nil && historyReadError == nil && pruningError == nil &&
+        localMutationReadError == nil && unresolvedLocalMutation == nil &&
+        localPruningPacket != nil && localPruningPacket?.vaultPath == selectedVault?.path &&
+        localPruningPacket?.keepPath == selectedKeeperPath
+    }
     var canApplyPruning: Bool {
         !isBusy && historyReadError == nil && pruningError == nil && authorityPolicyURL != nil &&
+        localMutationReadError == nil && unresolvedLocalMutation == nil &&
         permissionReceiptURL != nil && pruningPacket != nil && pruningPacket?.vaultPath == selectedVault?.path
     }
 
@@ -324,6 +346,7 @@ final class VaultAppModel {
         Task {
             await perform("Scanning this vault with Grapheine") { _ in
                 self.clearPreparedPruning()
+                self.selectedKeeperPath = nil
                 self.pruningError = nil
                 do {
                     let scan = try await self.grapheine.scan(vaultURL: vault.url, policyURL: policy)
@@ -359,6 +382,7 @@ final class VaultAppModel {
         guard !isBusy else { return }
         selectedPruningGroupID = group.id
         selectedPruningQuestionID = nil
+        selectedKeeperPath = nil
         clearPreparedPruning()
         clearPruningNote()
     }
@@ -367,6 +391,7 @@ final class VaultAppModel {
         guard !isBusy else { return }
         selectedPruningQuestionID = question.id
         selectedPruningGroupID = nil
+        selectedKeeperPath = nil
         clearPreparedPruning()
         clearPruningNote()
     }
@@ -380,6 +405,104 @@ final class VaultAppModel {
                 self.pruningNoteError = nil
                 do { self.pruningNoteText = try await self.grapheine.readNote(vaultURL: vault.url, path: path) }
                 catch { self.pruningNoteError = error.localizedDescription; throw error }
+            }
+        }
+    }
+
+    func chooseKeeper(_ path: String) {
+        guard !isBusy, authorityPolicyURL == nil, selectedPruningGroup?.members.contains(path) == true else { return }
+        selectedKeeperPath = path
+        clearPreparedPruning()
+    }
+
+    func prepareLocalPruning() {
+        guard canPrepareLocalPruning, let vault = selectedVault, let group = selectedPruningGroup,
+              let keeper = selectedKeeperPath, let scan = pruningScan else { return }
+        Task {
+            await perform("Checking preservation and preparing changes") { _ in
+                self.clearPreparedPruning()
+                do {
+                    let packet = try await self.grapheine.prepareLocal(vaultURL: vault.url, members: group.members,
+                        keepPath: keeper, fingerprint: scan.fingerprint)
+                    self.localPruningPacket = packet
+                    self.selectedLocalChangePath = packet.changes.first?.path
+                } catch {
+                    self.localReviewHold = error.localizedDescription
+                    throw error
+                }
+            }
+        }
+    }
+
+    func applyLocalPruning() {
+        guard canApplyLocalPruning, let vault = selectedVault, let packet = localPruningPacket else { return }
+        Task {
+            await perform("Rechecking the reviewed Markdown changes") { store in
+                let verified: LocalPruningPacket
+                do { verified = try await self.grapheine.verifyLocal(vaultURL: vault.url, packet: packet) }
+                catch {
+                    self.clearPreparedPruning()
+                    self.pruningError = "The review could not be verified. No local pruning was started. Scan and review again. \(error.localizedDescription)"
+                    throw error
+                }
+                let scope = try CheckpointScope.markdownOnly(excludedPaths: verified.scope.excludedPaths,
+                    sourceConfigurationSHA256: verified.scope.sourceConfigurationSHA256)
+                let mutations = try verified.changes.map { change -> MarkdownMutation in
+                    guard let before = verified.originals[change.path] else {
+                        throw GrapheineError.invalidResponse("A reviewed file has no preserved original.")
+                    }
+                    return MarkdownMutation(path: change.path, before: before, after: change.after.map { Data($0.utf8) })
+                }
+                let plan = try MarkdownMutationPlan(vaultID: vault.id, vaultPath: vault.path, scope: scope,
+                    expectedFiles: verified.files, changes: mutations, reviewedPacket: packet.rawData)
+                self.busyDescription = "Saving recovery history and applying reviewed changes"
+                do {
+                    let receipt = try await store.applyMarkdownMutation(plan)
+                    self.clearPruningResults()
+                    if receipt.status == .completed {
+                        let completion = "Reviewed changes applied locally. Before and after checkpoints are retained. Receipt \(receipt.id.uuidString.prefix(8)). Scan again before another review."
+                        await self.refreshAfterCompletion(completion) {
+                            try await self.reloadHistory(store: store, preferred: receipt.afterCheckpointID ?? receipt.beforeCheckpointID)
+                        }
+                    } else {
+                        self.pruningError = "Pruning needs recovery review. Inspect the working folder and the saved pre-change checkpoint before another attempt."
+                        self.errorMessage = receipt.error ?? self.pruningError
+                        try await self.reloadHistory(store: store, preferred: receipt.beforeCheckpointID)
+                    }
+                } catch {
+                    self.clearPreparedPruning()
+                    self.pruningError = "Local pruning did not return a confirmed completed result. Inspect recovery history before retrying."
+                    self.errorMessage = "\(self.pruningError ?? "")\n\n\(error.localizedDescription)"
+                    do { try await self.reloadHistory(store: store) }
+                    catch { self.historyReadError = error.localizedDescription }
+                }
+            }
+        }
+    }
+
+    func openLocalRecovery(_ receipt: MarkdownMutationReceipt) {
+        guard !isBusy else { return }
+        localRecoveryReviewPresented = false
+        Task {
+            await perform("Opening the pre-change checkpoint") { store in
+                self.selectedSurface = .history
+                try await self.reloadHistory(store: store, preferred: receipt.beforeCheckpointID)
+                self.showNotice("Inspect this pre-change checkpoint. Restore Copy creates a separate recovered vault; it does not overwrite the interrupted working folder or clear its recovery record.")
+            }
+        }
+    }
+
+    func acknowledgeLocalRecovery(_ receipt: MarkdownMutationReceipt) {
+        guard !isBusy, let vault = selectedVault,
+              localMutationReceipts.contains(where: { $0.id == receipt.id && $0.status != .completed }) else { return }
+        Task {
+            await perform("Recording your recovery review") { store in
+                _ = try await store.acknowledgeMutationRecovery(vaultID: vault.id, operationID: receipt.id)
+                self.localRecoveryReviewPresented = false
+                self.clearPruningResults()
+                await self.refreshAfterCompletion("Recovery review recorded. The earlier operation remains interrupted; its checkpoints and recovery records are retained. Scan again to prepare a new proposal.") {
+                    try await self.reloadHistory(store: store, preferred: receipt.beforeCheckpointID)
+                }
             }
         }
     }
@@ -541,6 +664,9 @@ final class VaultAppModel {
 
     private func resetPruningForSelectedVault() {
         clearPruningResults()
+        localMutationReceipts = []
+        localMutationReadError = nil
+        localRecoveryReviewPresented = false
         pruningRecoveryWarning = selectedVaultID.flatMap { pruningAttemptWarning(vaultID: $0) }
         authorityPolicyURL = selectedVaultID.flatMap { id in
             UserDefaults.standard.string(forKey: policyPreferenceKey(id)).flatMap(URL.init(string:))
@@ -549,6 +675,9 @@ final class VaultAppModel {
 
     private func clearPreparedPruning() {
         pruningPacket = nil
+        localPruningPacket = nil
+        localReviewHold = nil
+        selectedLocalChangePath = nil
         selectedPruningChangePath = nil
         permissionReceiptURL = nil
     }
@@ -564,6 +693,7 @@ final class VaultAppModel {
         pruningError = nil
         selectedPruningGroupID = nil
         selectedPruningQuestionID = nil
+        selectedKeeperPath = nil
         clearPreparedPruning()
         clearPruningNote()
     }
@@ -606,6 +736,12 @@ final class VaultAppModel {
 
     private func reloadHistory(store: VaultStore, preferred: UUID? = nil) async throws {
         guard let id = selectedVaultID else { clearHistory(); return }
+        do {
+            localMutationReceipts = try await store.mutationReceipts(vaultID: id)
+            localMutationReadError = nil
+        } catch {
+            localMutationReadError = "Local pruning recovery records could not be read. Applying is held until these records are available. \(error.localizedDescription)"
+        }
         let updated: [Checkpoint]
         do {
             updated = try await store.checkpoints(vaultID: id)

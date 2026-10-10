@@ -116,6 +116,85 @@ public struct PruningApplyResult: Decodable, Sendable {
     public let message: String?
 }
 
+/// A local, unsigned proposal. The app asks the user to choose a keeper and
+/// approve its exact changes; this type is never a signed authority receipt.
+public struct LocalPruningPacket: Sendable {
+    public struct Scope: Decodable, Sendable {
+        public let version: Int
+        public let excludedPaths: [String]
+        public let sourceConfigurationSHA256: String?
+    }
+
+    public let rawData: Data
+    public let digest: String
+    public let vaultPath: String
+    public let keepPath: String
+    public let members: [String]
+    public let files: [String: String]
+    public let scope: Scope
+    public let changes: [PruningChange]
+    public let originals: [String: Data]
+    public let limitations: [String]
+
+    internal init(data: Data) throws {
+        struct Envelope: Decodable {
+            struct Payload: Decodable {
+                let schema: String
+                let vault: String
+                let value: String
+                let members: [String]
+                let files: [String: String]
+                let scope: Scope
+                let changes: [String: String?]
+                let originals: [String: String]
+                let limitations: [String]
+            }
+            let digest: String
+            let packet: Payload
+        }
+        let envelope = try JSONDecoder().decode(Envelope.self, from: data)
+        let packet = envelope.packet
+        func validDigest(_ value: String) -> Bool {
+            value.count == 64 && value.allSatisfy { "0123456789abcdef".contains($0) }
+        }
+        guard packet.schema == "planisphere-local-prune-v1", validDigest(envelope.digest),
+              packet.scope.version == 2, packet.members.count >= 2, packet.members.count <= 1_000,
+              Set(packet.members).count == packet.members.count, packet.members.contains(packet.value),
+              packet.files.count <= 250_000, !packet.changes.isEmpty, packet.changes.count <= 10_000,
+              packet.scope.excludedPaths.count <= 4_096, packet.limitations.count <= 100,
+              Set(packet.changes.keys) == Set(packet.originals.keys),
+              Set(packet.members).isSubset(of: Set(packet.files.keys)),
+              Set(packet.changes.keys).isSubset(of: Set(packet.files.keys)),
+              packet.files.values.allSatisfy(validDigest),
+              packet.scope.sourceConfigurationSHA256.map(validDigest) ?? true else {
+            throw GrapheineError.invalidResponse("The local pruning proposal is incomplete or uses an unsupported format.")
+        }
+        for path in packet.files.keys {
+            try GrapheineService.validateRelativePath(path)
+            guard path.hasSuffix(".md") else { throw GrapheineError.invalidResponse("The local proposal contains a non-Markdown file.") }
+        }
+        // The keeper remains present. Every other reviewed member must be an
+        // explicit retirement; unrelated files may be rewritten, never retired.
+        let retirements = Set(packet.changes.compactMap { key, value in value == nil ? key : nil })
+        guard retirements == Set(packet.members).subtracting([packet.value]) else {
+            throw GrapheineError.invalidResponse("The proposed retirements do not match the chosen note and reviewed group.")
+        }
+        var preview: [PruningChange] = []
+        var originalBytes: [String: Data] = [:]
+        for path in packet.changes.keys.sorted() {
+            guard let encoded = packet.originals[path], let bytes = Data(base64Encoded: encoded),
+                  let before = String(data: bytes, encoding: .utf8) else {
+                throw GrapheineError.invalidResponse("A local change has no readable original: \(path)")
+            }
+            originalBytes[path] = bytes
+            preview.append(PruningChange(path: path, before: before, after: packet.changes[path] ?? nil))
+        }
+        rawData = data; digest = envelope.digest; vaultPath = packet.vault
+        keepPath = packet.value; members = packet.members; files = packet.files
+        scope = packet.scope; changes = preview; originals = originalBytes; limitations = packet.limitations
+    }
+}
+
 public enum GrapheineError: Error, LocalizedError, Sendable {
     case unavailable(String)
     case refused(String)

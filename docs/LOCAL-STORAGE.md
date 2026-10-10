@@ -10,9 +10,9 @@ Two broader modes remain available in the review. **Vault Content** preserves no
 
 The review shows estimated included counts and bytes, excluded root counts and up to 200 excluded paths. Excluding a directory excludes its subtree; counts do not imply every descendant was inspected. Regex, wildcard and other unsupported Obsidian filters are listed and are not applied. The user must choose Save Checkpoint after review. No source file is moved or deleted. The settings hash is checked again before and after capture; changed exclusions require a new review.
 
-A scoped checkpoint stores its frozen `captureScope` rules and configuration hash in the manifest. Scope version 1 retains the original Vault Content rules; scope version 2 means Markdown Only. A nil scope means Whole Folder. Existing scopes are not reinterpreted. Scoped checkpoints cannot recover excluded content; History labels their scope, and restore/export use only their included entries. Pre-pruning recovery checkpoints continue to require Whole Folder and do not inherit discovery exclusions. Apps older than 0.3.1 cannot read the new scope version.
+A scoped checkpoint stores its frozen `captureScope` rules and configuration hash in the manifest. Scope version 1 retains the original Vault Content rules; scope version 2 means Markdown Only. A nil scope means Whole Folder. Existing scopes are not reinterpreted. Scoped checkpoints cannot recover excluded content; History labels their scope, and restore/export use only their included entries. Local reviewed pruning uses Markdown Only checkpoints with the same frozen scope as its review. The separate legacy signed-policy path retains Whole Folder recovery checkpoints. Apps older than 0.3.1 cannot read scope version 2.
 
-A checkpoint is a storage version, not permission for autonomous semantic changes. This implementation has no authority activation, remote storage or sync. Local history on the same disk does not protect against device loss.
+A checkpoint is a storage version, not permission for autonomous semantic changes. Local pruning requires a separate explicit choice and exact-change confirmation. This implementation has no authority activation, remote storage or sync. Local history on the same disk does not protect against device loss.
 
 ## Store and identities
 

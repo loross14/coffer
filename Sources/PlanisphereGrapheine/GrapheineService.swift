@@ -68,6 +68,43 @@ public actor GrapheineService {
         return packet
     }
 
+    public func prepareLocal(vaultURL: URL, members: [String], keepPath: String, fingerprint: String) async throws -> LocalPruningPacket {
+        guard members.count >= 2, members.count <= 1_000, Set(members).count == members.count,
+              members.contains(keepPath), fingerprint.count == 64,
+              fingerprint.allSatisfy({ "0123456789abcdef".contains($0) }) else {
+            throw GrapheineError.refused("Choose the note to keep from the complete candidate group.")
+        }
+        for path in members { try Self.validateRelativePath(path) }
+        let encoded = try JSONEncoder().encode(members)
+        let data = try await invoke("prepare-local", vaultURL: vaultURL, policyURL: nil,
+            arguments: ["--members", String(decoding: encoded, as: UTF8.self), "--keep", keepPath, "--fingerprint", fingerprint])
+        let packet = try LocalPruningPacket(data: data)
+        guard packet.vaultPath == vaultURL.path, packet.keepPath == keepPath,
+              Set(packet.members) == Set(members) else {
+            throw GrapheineError.invalidResponse("The local proposal does not match this vault and your keeper choice.")
+        }
+        return packet
+    }
+
+    public func verifyLocal(vaultURL: URL, packet: LocalPruningPacket) async throws -> LocalPruningPacket {
+        guard packet.vaultPath == vaultURL.path else {
+            throw GrapheineError.refused("The review belongs to another vault. Prepare a new review.")
+        }
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("local-packet.json")
+        try packet.rawData.write(to: file, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        let data = try await invoke("verify-local", vaultURL: vaultURL, policyURL: nil, arguments: ["--packet", file.path])
+        let verified = try LocalPruningPacket(data: data)
+        guard verified.vaultPath == packet.vaultPath, verified.digest == packet.digest,
+              verified.keepPath == packet.keepPath, Set(verified.members) == Set(packet.members),
+              verified.rawData == packet.rawData else {
+            throw GrapheineError.refused("The reviewed changes are no longer current. Prepare and inspect a new review.")
+        }
+        return verified
+    }
+
     public func apply(vaultURL: URL, policyURL: URL, packet: PruningPacket, receiptURL: URL) async throws -> PruningApplyResult {
         guard packet.vaultPath == vaultURL.path else {
             throw GrapheineError.refused("The pruning review belongs to another vault. Scan this vault again.")
