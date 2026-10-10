@@ -20,6 +20,9 @@ private struct PruningAttempt: Codable {
 @MainActor
 @Observable
 final class VaultAppModel {
+    var sidebarVisible = true
+    var commandPalettePresented = false
+    var workspaceConfirmationPresented = false
     var selectedSurface: VaultSurface = .history
     var vaults: [VaultRecord] = []
     var selectedVaultID: UUID?
@@ -79,6 +82,14 @@ final class VaultAppModel {
     }
 
     var selectedVault: VaultRecord? { vaults.first { $0.id == selectedVaultID } }
+    var canNavigateWorkspace: Bool {
+        !isBusy && !checkpointReviewPresented && !localRecoveryReviewPresented && !workspaceConfirmationPresented && errorMessage == nil
+    }
+    func toggleCommandPalette() {
+        guard canNavigateWorkspace else { return }
+        if !commandPalettePresented { NSApp.keyWindow?.makeFirstResponder(nil) }
+        commandPalettePresented.toggle()
+    }
     var selectedCheckpoint: Checkpoint? { checkpoints.first { $0.id == selectedCheckpointID } }
     var selectedChange: FileChange? { changes.first { $0.path == selectedChangePath } }
     var canOpenObsidian: Bool { NSWorkspace.shared.urlForApplication(withBundleIdentifier: "md.obsidian") != nil }

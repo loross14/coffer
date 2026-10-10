@@ -16,10 +16,31 @@ struct PlanisphereApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("Add Existing Vault…") { model.chooseExistingVault() }
                     .keyboardShortcut("o", modifiers: [.command])
-                    .disabled(model.isBusy)
+                    .disabled(!model.canNavigateWorkspace || model.commandPalettePresented)
                 Button("Create New Vault…") { model.chooseNewVault() }
                     .keyboardShortcut("n", modifiers: [.command])
-                    .disabled(model.isBusy)
+                    .disabled(!model.canNavigateWorkspace || model.commandPalettePresented)
+            }
+            CommandMenu("Workspace") {
+                Button("Go Anywhere…") { model.toggleCommandPalette() }
+                    .keyboardShortcut("k", modifiers: .command)
+                    .disabled(!model.canNavigateWorkspace)
+                Button("Close Go Anywhere") { model.commandPalettePresented = false }
+                    .keyboardShortcut(.escape, modifiers: [])
+                    .disabled(!model.commandPalettePresented)
+                Divider()
+                ForEach(Array(VaultSurface.allCases.enumerated()), id: \.element) { index, surface in
+                    Button("Open \(surface.rawValue)") { model.selectedSurface = surface }
+                        .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
+                        .disabled(!model.canNavigateWorkspace || model.selectedVault == nil || model.commandPalettePresented)
+                }
+                Divider()
+                Button(model.sidebarVisible ? "Hide Sidebar" : "Show Sidebar") { model.sidebarVisible.toggle() }
+                    .keyboardShortcut("\\", modifiers: .command)
+                    .disabled(!model.canNavigateWorkspace || model.commandPalettePresented)
+                Button("Create Checkpoint…") { model.createCheckpoint() }
+                    .keyboardShortcut("s", modifiers: .command)
+                    .disabled(!model.canNavigateWorkspace || model.selectedVault == nil || model.historyReadError != nil || model.commandPalettePresented)
             }
         }
     }

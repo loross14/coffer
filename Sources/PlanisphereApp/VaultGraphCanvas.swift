@@ -3,18 +3,21 @@ import SwiftUI
 import PlanisphereGraph
 import PlanisphereGrapheine
 
-enum GraphPalette {
+@MainActor enum GraphPalette {
     static func group(_ folder: String) -> String { folder.split(separator: "/").first.map(String.init) ?? "" }
+    private static let colors: [NSColor] = [
+        (0.30, 0.46, 0.80), (0.30, 0.58, 0.55), (0.54, 0.46, 0.68),
+        (0.68, 0.49, 0.34), (0.65, 0.43, 0.53), (0.39, 0.54, 0.66),
+        (0.49, 0.56, 0.36)
+    ].enumerated().map { index, rgb in
+        NSColor(name: NSColor.Name("PlanisphereGraphFolder\(index)")) { appearance in
+            let lift = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? 0.22 : 0
+            return NSColor(srgbRed: rgb.0 + (1 - rgb.0) * lift,
+                           green: rgb.1 + (1 - rgb.1) * lift,
+                           blue: rgb.2 + (1 - rgb.2) * lift, alpha: 1)
+        }
+    }
     static func color(for folder: String) -> NSColor {
-        let colors: [NSColor] = [
-            .init(srgbRed: 0.40, green: 0.70, blue: 1.00, alpha: 1),
-            .init(srgbRed: 0.39, green: 0.83, blue: 0.70, alpha: 1),
-            .init(srgbRed: 0.77, green: 0.62, blue: 0.97, alpha: 1),
-            .init(srgbRed: 0.97, green: 0.70, blue: 0.43, alpha: 1),
-            .init(srgbRed: 0.95, green: 0.53, blue: 0.66, alpha: 1),
-            .init(srgbRed: 0.58, green: 0.81, blue: 0.92, alpha: 1),
-            .init(srgbRed: 0.77, green: 0.82, blue: 0.43, alpha: 1)
-        ]
         var hash: UInt64 = 14695981039346656037
         for byte in group(folder).utf8 { hash = (hash ^ UInt64(byte)) &* 1099511628211 }
         return colors[Int(hash % UInt64(colors.count))]
@@ -22,6 +25,7 @@ enum GraphPalette {
 }
 
 struct VaultGraphCanvas: NSViewRepresentable {
+    @Environment(\.isEnabled) private var isEnabled
     let snapshot: GraphSnapshot
     let revision: UUID
     let selectedID: String?
@@ -39,11 +43,27 @@ struct VaultGraphCanvas: NSViewRepresentable {
     var onMoving: (Bool) -> Void
 
     func makeNSView(context: Context) -> GraphDrawingView { GraphDrawingView() }
-    func updateNSView(_ view: GraphDrawingView, context: Context) { view.configure(self) }
+    func updateNSView(_ view: GraphDrawingView, context: Context) {
+        view.interactionEnabled = isEnabled
+        view.configure(self)
+    }
     static func dismantleNSView(_ view: GraphDrawingView, coordinator: ()) { view.stop() }
 }
 
 @MainActor final class GraphDrawingView: NSView {
+    var interactionEnabled = true {
+        didSet {
+            if !interactionEnabled {
+                if window?.firstResponder === self { window?.makeFirstResponder(nil) }
+                if let dragging, didDrag { simulation?.release(index: dragging, pin: pinnedIDs.contains(nodes[dragging].id)) }
+                dragging = nil
+                mouseGestureActive = false
+                didDrag = false
+                hovered = nil
+                needsDisplay = true
+            }
+        }
+    }
     private var simulation: GraphSimulation?
     private var nodes: [GraphNode] = []
     private var links: [GraphLink] = []
@@ -76,13 +96,14 @@ struct VaultGraphCanvas: NSViewRepresentable {
     private var panStart = CGPoint.zero
     private var dragOffset = CGPoint.zero
     private var didDrag = false
+    private var mouseGestureActive = false
     private var lastMoving = false
     private var onSelect: ((String?) -> Void)?
     private var onOpen: (() -> Void)?
     private var onMoving: ((Bool) -> Void)?
 
     override var isFlipped: Bool { true }
-    override var acceptsFirstResponder: Bool { true }
+    override var acceptsFirstResponder: Bool { interactionEnabled }
     override var isOpaque: Bool { true }
 
     init() {
@@ -111,6 +132,8 @@ struct VaultGraphCanvas: NSViewRepresentable {
             snapshotKey = key
             hovered = nil
             dragging = nil
+            mouseGestureActive = false
+            didDrag = false
             nodes = input.snapshot.nodes
             indexByID = Dictionary(uniqueKeysWithValues: nodes.enumerated().map { ($0.element.id, $0.offset) })
             links = input.snapshot.edges.compactMap { edge in
@@ -242,16 +265,12 @@ struct VaultGraphCanvas: NSViewRepresentable {
 
     override func draw(_ dirtyRect: NSRect) {
         let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let background = dark ? NSColor(srgbRed: 0.055, green: 0.065, blue: 0.09, alpha: 1) : NSColor(srgbRed: 0.955, green: 0.965, blue: 0.985, alpha: 1)
+        let background = NSColor(PSStyle.canvas)
         background.setFill(); bounds.fill()
         guard let context = NSGraphicsContext.current?.cgContext, let simulation else { return }
         let points = simulation.positions.map(screen)
-        let foreground = dark ? NSColor.white : NSColor.black
-        // A quiet, viewport-fixed field makes panning legible without more graph edges.
-        context.setFillColor(foreground.withAlphaComponent(0.055).cgColor)
-        for x in stride(from: 24.0, to: bounds.width, by: 32) {
-            for y in stride(from: 24.0, to: bounds.height, by: 32) { context.fillEllipse(in: CGRect(x: x, y: y, width: 1, height: 1)) }
-        }
+        let foreground = NSColor.labelColor
+        let accent = NSColor(PSStyle.accent)
         let ordinary = CGMutablePath(), emphasized = CGMutablePath()
         let focus = selected ?? hovered
         for edge in links where visible[edge.source] && visible[edge.target] {
@@ -262,10 +281,10 @@ struct VaultGraphCanvas: NSViewRepresentable {
             path.move(to: a); path.addLine(to: b)
         }
         context.addPath(ordinary)
-        context.setStrokeColor(foreground.withAlphaComponent(focus == nil && search.isEmpty ? (dark ? 0.14 : 0.12) : 0.04).cgColor)
+        context.setStrokeColor(foreground.withAlphaComponent(focus == nil && search.isEmpty ? (dark ? 0.14 : 0.11) : 0.035).cgColor)
         context.setLineWidth(0.65); context.strokePath()
         context.addPath(emphasized)
-        context.setStrokeColor(NSColor(srgbRed: 0.50, green: 0.70, blue: 1, alpha: dark ? 0.72 : 0.75).cgColor)
+        context.setStrokeColor(accent.withAlphaComponent(dark ? 0.70 : 0.62).cgColor)
         context.setLineWidth(1.25); context.strokePath()
         for i in nodes.indices where visible[i] {
             let point = points[i], r = radius(i)
@@ -274,15 +293,15 @@ struct VaultGraphCanvas: NSViewRepresentable {
             let found = search.isEmpty || matches.contains(i)
             let active = i == selected || i == hovered
             let alpha = active ? 1.0 : nearby && found ? 0.90 : 0.18
-            let color = dark ? colors[i] : colors[i].blended(withFraction: 0.22, of: .black) ?? colors[i]
+            let color = colors[i]
             if active {
-                context.setFillColor(color.withAlphaComponent(0.12).cgColor)
+                context.setFillColor(accent.withAlphaComponent(0.10).cgColor)
                 context.fillEllipse(in: CGRect(x: point.x - r - 9, y: point.y - r - 9, width: 2 * r + 18, height: 2 * r + 18))
             }
             context.setFillColor(color.withAlphaComponent(alpha).cgColor)
             context.fillEllipse(in: CGRect(x: point.x - r, y: point.y - r, width: 2 * r, height: 2 * r))
             if active || pinnedIDs.contains(nodes[i].id) {
-                context.setStrokeColor(foreground.withAlphaComponent(active ? 0.95 : 0.6).cgColor)
+                context.setStrokeColor((active ? accent : foreground).withAlphaComponent(active ? 0.95 : 0.55).cgColor)
                 context.setLineWidth(active ? 1.5 : 1)
                 context.strokeEllipse(in: CGRect(x: point.x - r - 2.5, y: point.y - r - 2.5, width: 2 * r + 5, height: 2 * r + 5))
             }
@@ -299,15 +318,15 @@ struct VaultGraphCanvas: NSViewRepresentable {
             let point = points[i]
             guard bounds.insetBy(dx: 5, dy: 5).contains(point) else { continue }
             let prominent = i == selected || i == hovered
-            let font = NSFont.systemFont(ofSize: prominent ? 12 : 10, weight: prominent ? .semibold : .medium)
+            let font = NSFont.systemFont(ofSize: prominent ? 13 : 11, weight: prominent ? .semibold : .medium)
             let title = nodes[i].title.count > 37 ? String(nodes[i].title.prefix(35)) + "…" : nodes[i].title
-            let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: foreground.withAlphaComponent(prominent ? 1 : 0.72)]
+            let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: foreground.withAlphaComponent(prominent ? 1 : 0.84)]
             let size = (title as NSString).size(withAttributes: attributes)
             let rect = CGRect(x: point.x + radius(i) + 7, y: point.y - size.height / 2, width: size.width, height: size.height)
             guard prominent || !occupied.contains(where: { $0.intersects(rect.insetBy(dx: -4, dy: -3)) }) else { continue }
             occupied.append(rect)
-            background.withAlphaComponent(0.88).setFill()
-            NSBezierPath(roundedRect: rect.insetBy(dx: -3, dy: -2), xRadius: 3, yRadius: 3).fill()
+            background.withAlphaComponent(0.96).setFill()
+            NSBezierPath(roundedRect: rect.insetBy(dx: -4, dy: -3), xRadius: 4, yRadius: 4).fill()
             (title as NSString).draw(in: rect, withAttributes: attributes)
         }
         if nodes.isEmpty || !visible.contains(true) {
@@ -335,11 +354,14 @@ struct VaultGraphCanvas: NSViewRepresentable {
         return best
     }
     override func mouseMoved(with event: NSEvent) {
+        guard interactionEnabled else { return }
         let next = hit(convert(event.locationInWindow, from: nil))
         if next != hovered { hovered = next; needsDisplay = true; next == nil ? NSCursor.openHand.set() : NSCursor.pointingHand.set() }
     }
     override func mouseExited(with event: NSEvent) { hovered = nil; needsDisplay = true; NSCursor.arrow.set() }
     override func mouseDown(with event: NSEvent) {
+        guard interactionEnabled else { return }
+        mouseGestureActive = true
         window?.makeFirstResponder(self)
         mouseStart = convert(event.locationInWindow, from: nil)
         panStart = offset
@@ -354,6 +376,7 @@ struct VaultGraphCanvas: NSViewRepresentable {
         NSCursor.closedHand.set()
     }
     override func mouseDragged(with event: NSEvent) {
+        guard interactionEnabled, mouseGestureActive else { return }
         let point = convert(event.locationInWindow, from: nil)
         if hypot(point.x - mouseStart.x, point.y - mouseStart.y) > 2 { didDrag = true }
         guard didDrag else { return }
@@ -368,6 +391,8 @@ struct VaultGraphCanvas: NSViewRepresentable {
         needsDisplay = true
     }
     override func mouseUp(with event: NSEvent) {
+        guard interactionEnabled, mouseGestureActive else { return }
+        mouseGestureActive = false
         if let dragging {
             if didDrag {
                 simulation?.release(index: dragging, pin: pinnedIDs.contains(nodes[dragging].id))
@@ -385,11 +410,16 @@ struct VaultGraphCanvas: NSViewRepresentable {
         needsDisplay = true
     }
     override func scrollWheel(with event: NSEvent) {
+        guard interactionEnabled else { return }
         let amount = max(-0.28, min(0.28, event.scrollingDeltaY * (event.hasPreciseScrollingDeltas ? 0.008 : 0.075)))
         zoom(exp(amount), at: convert(event.locationInWindow, from: nil))
     }
-    override func magnify(with event: NSEvent) { zoom(exp(event.magnification), at: convert(event.locationInWindow, from: nil)) }
+    override func magnify(with event: NSEvent) {
+        guard interactionEnabled else { return }
+        zoom(exp(event.magnification), at: convert(event.locationInWindow, from: nil))
+    }
     override func keyDown(with event: NSEvent) {
+        guard interactionEnabled else { return }
         switch event.keyCode {
         case 123: offset.x += 35
         case 124: offset.x -= 35

@@ -1,6 +1,6 @@
 # Local graph view
 
-The Graph workspace in Planisphere for Mac 0.5.0 visualizes explicit links between the selected vault's Markdown notes. Reading, navigation, layout, pinning and refresh do not edit vault files or require Git, a policy, an account or a network connection. The bundled read adapter uses the installed Python runtime described in [GRAPHEINE.md](GRAPHEINE.md).
+The Graph workspace in Planisphere for Mac 0.6.0 visualizes explicit links between the selected vault's Markdown notes. Reading, navigation, layout, pinning and refresh do not edit vault files or require Git, a policy, an account or a network connection. The bundled read adapter uses the installed Python runtime described in [GRAPHEINE.md](GRAPHEINE.md).
 
 ## Reading and scope
 
@@ -8,11 +8,13 @@ The graph shares the bounded Markdown discovery inventory with pruning: supporte
 
 Node identity is the complete relative note path. Wikilinks use an exact path or unambiguous basename; Markdown destinations resolve relative to their source note. Code, YAML frontmatter and HTML comments do not create links. Reference-style Markdown is supported. Alias inference and arbitrary HTML navigation are not implemented. Unresolved, ambiguous and unsupported counts remain visible in Snapshot & scope rather than being turned into invented edges. Repeated links in one direction become one directed edge; degrees describe returned edges.
 
-Discovery is bounded to 20,000 admitted notes and 256 MiB. The graph returns at most 10,000 nodes and 100,000 directed edges, with omitted totals disclosed. Link-occurrence limits prevent excessively dense inputs from running unbounded. Counts are tied to the admitted snapshot, not a claim to index every file on disk. The bottom bar reports visible notes and links when the neighborhood or unlinked-note filter is active.
+Discovery is bounded to 20,000 admitted notes and 256 MiB. The graph returns at most 10,000 nodes and 100,000 directed edges, with omitted totals disclosed. Link-occurrence limits prevent excessively dense inputs from running unbounded. Counts are tied to the admitted snapshot, not a claim to index every file on disk. The floating search card reports visible notes and links when the neighborhood or unlinked-note filter is active.
 
 Refresh takes a new snapshot. Surviving paths retain their positions and pins in the current view; leaving the view or switching vault starts a new view session. Background reads cancel on departure and stale results cannot replace the newly selected vault. Selecting a note reads its current text independently; refresh re-reads a selected preview. The graph is not an automatic filesystem watcher.
 
 ## Layout and interaction
+
+The graph occupies the workspace below a compact vault header. Search and counts float at the top; Fit, Pause/Resume, Refresh, Settings and Snapshot scope sit in a small bottom dock. Settings contains neighborhood, unlinked notes, spacing, pins and Arrange Again. Selecting or searching opens the details panel; closing it preserves the selection and search until an explicit new interaction reopens it. **⌘F** focuses graph search. All controls have accessible labels and native tooltips.
 
 `PlanisphereGraph` is a pure Swift simulation with no filesystem or rendering dependency. It uses deterministic component packing and optional folder groups for initial placement and weak positional attraction. Folder grouping is a visual aid, not evidence of semantic proximity. Springs are generated only from actual links. Unlinked notes share a compact island.
 

@@ -12,19 +12,29 @@ struct PruningView: View {
                 .fixedSize(horizontal: false, vertical: true)
             Divider()
             GeometryReader { bounds in
+                let listWidth: CGFloat = model.pruningScan == nil ? 0 : 224
                 HStack(spacing: 0) {
-                    resultsList
-                        .frame(width: 230, height: bounds.size.height, alignment: .top)
-                    Divider()
+                    if listWidth > 0 {
+                        resultsList.frame(width: listWidth, height: bounds.size.height, alignment: .top)
+                        Divider()
+                    }
                     ScrollView {
                         detail
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(22)
+                            .frame(maxWidth: 720, alignment: .leading)
+                            .padding(24)
+                            .frame(maxWidth: .infinity, alignment: .center)
                     }
-                    .frame(width: max(0, bounds.size.width - 231), height: bounds.size.height)
+                    .frame(width: max(0, bounds.size.width - listWidth - (listWidth > 0 ? 1 : 0)), height: bounds.size.height)
                 }
                 .frame(width: bounds.size.width, height: bounds.size.height)
             }
+        }
+        .background(PSStyle.canvas)
+        .onChange(of: confirmApply) { _, _ in
+            model.workspaceConfirmationPresented = confirmApply || confirmDisconnectPolicy
+        }
+        .onChange(of: confirmDisconnectPolicy) { _, _ in
+            model.workspaceConfirmationPresented = confirmApply || confirmDisconnectPolicy
         }
         .confirmationDialog("Apply the reviewed changes to this vault?", isPresented: $confirmApply, titleVisibility: .visible) {
             Button("Apply Reviewed Changes", role: .destructive) {
@@ -46,16 +56,16 @@ struct PruningView: View {
     }
 
     private var controls: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Review with Grapheine").font(.headline)
-                    Text("Find related accounts. Preserve evidence. Review exact changes.")
+                    Text("Review your notes").font(.system(size: 18, weight: .semibold))
+                    Text("Choose what stays. Inspect every change.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
                 Button(model.pruningScan == nil ? "Scan Vault" : "Scan Again", systemImage: "sparkle.magnifyingglass") { model.scanPruning() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(PSButtonStyle(primary: true))
                     .accessibilityIdentifier("scan-pruning")
             }
             HStack(spacing: 10) {
@@ -63,10 +73,12 @@ struct PruningView: View {
                     Image(systemName: "signature").foregroundStyle(.secondary)
                     Text("Signed policy: \(policy.lastPathComponent)").font(.caption).lineLimit(1).truncationMode(.middle)
                         .help(policy.path)
-                    Button("Change Policy…") { model.chooseAuthorityPolicy() }.font(.caption)
-                    Button("Disconnect…") { confirmDisconnectPolicy = true }.font(.caption)
+                    Menu("Policy") {
+                        Button("Change Policy…") { model.chooseAuthorityPolicy() }
+                        Button("Disconnect…") { confirmDisconnectPolicy = true }
+                    }.font(.caption).fixedSize(horizontal: true, vertical: false)
                 } else {
-                    Label("Local review · your choice, exact changes", systemImage: "person.crop.circle.badge.checkmark")
+                    Label("Local review", systemImage: "person.crop.circle.badge.checkmark")
                         .font(.caption).foregroundStyle(.secondary)
                     Menu("Advanced") {
                         Button("Connect Signed Policy…") { model.chooseAuthorityPolicy() }
@@ -76,7 +88,8 @@ struct PruningView: View {
             }
             .accessibilityIdentifier("pruning-policy")
         }
-        .padding(.horizontal, 24).padding(.vertical, 16)
+        .padding(.horizontal, 24).padding(.vertical, 18)
+        .background(PSStyle.surface)
         .disabled(model.isBusy)
     }
 
@@ -85,11 +98,13 @@ struct PruningView: View {
             VStack(alignment: .leading, spacing: 14) {
                 if let scan = model.pruningScan {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text("\(scan.notes) Markdown notes inspected").font(.system(size: 12, weight: .semibold))
-                        Text("\(scan.scope.excludedCount) locations excluded")
-                            .font(.caption2).foregroundStyle(.secondary)
-                        Text("\(scan.groups.count) of \(scan.totalGroups) candidate groups shown")
-                            .font(.caption2).foregroundStyle(.secondary)
+                        Text("\(scan.groups.count.formatted()) candidate groups").font(.system(size: 13, weight: .semibold))
+                        Text("From \(scan.notes.formatted()) Markdown notes")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if scan.groups.count < scan.totalGroups {
+                            Text("Showing \(scan.groups.count) of \(scan.totalGroups) groups")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
                         Text("Scanned \(scanDate(scan.scannedAt))").font(.caption2).foregroundStyle(.secondary)
                         if model.pruningError != nil {
                             Label("Previous scan — scan again", systemImage: "exclamationmark.circle")
@@ -98,7 +113,7 @@ struct PruningView: View {
                     }
                     sectionLabel("CANDIDATES")
                     if scan.groups.isEmpty {
-                        Text("No matching-account groups nominated.").font(.caption).foregroundStyle(.secondary)
+                        Text("No matching groups found in this scan.").font(.caption).foregroundStyle(.secondary)
                     }
                     ForEach(scan.groups) { group in
                         Button { model.selectPruningGroup(group) } label: {
@@ -132,11 +147,11 @@ struct PruningView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            .padding(16)
+            .padding(.horizontal, 12).padding(.vertical, 20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(minHeight: 0, maxHeight: .infinity)
-        .background(Color.primary.opacity(0.018))
+        .background(PSStyle.surface.opacity(0.65))
     }
 
     @ViewBuilder private var detail: some View {
@@ -146,7 +161,8 @@ struct PruningView: View {
             }
             if let historyError = model.historyReadError {
                 callout("Local recovery history unavailable", text: "Applying is held until history can be read. \(historyError)", symbol: "clock.badge.exclamationmark", color: .orange)
-                Button("Retry Reading History") { model.retryHistory() }.disabled(model.isBusy)
+                Button("Retry Reading History") { model.retryHistory() }
+                    .buttonStyle(PSButtonStyle()).disabled(model.isBusy)
             }
             if let scan = model.pruningScan {
                 scanCoverage(scan)
@@ -177,32 +193,55 @@ struct PruningView: View {
     }
 
     private var introduction: some View {
-        VStack(alignment: .leading, spacing: 17) {
-            Image(systemName: "leaf").font(.system(size: 35, weight: .light)).foregroundStyle(.tint)
-            Text("Make room without losing the record.").font(.title2.weight(.semibold))
-            Text("Grapheine nominates notes that may represent the same account. A matching name, few links, or an orphaned note is not permission to remove it.")
-                .font(.callout).foregroundStyle(.secondary).lineSpacing(4)
-            Text(model.authorityPolicyURL == nil
-                 ? "Select a candidate, read its members, and choose the note to keep. Review the proposed retirements and backlink updates before applying. Preservation holds can prevent a proposal."
-                 : "Select a candidate to read its members, or an authority question to inspect its decision and holds. This vault uses the connected signed policy.")
-                .font(.callout).foregroundStyle(.secondary).lineSpacing(4)
+        VStack(alignment: .leading, spacing: 22) {
+            Image(systemName: "leaf")
+                .font(.system(size: 28, weight: .light)).foregroundStyle(PSStyle.accent)
+                .frame(width: 58, height: 58)
+                .background(PSStyle.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Make room for clarity.").font(.system(size: 25, weight: .semibold))
+                Text("Grapheine finds notes that may cover the same account. You decide what stays. A scan never changes your notes.")
+                    .font(.callout).foregroundStyle(.secondary).lineSpacing(4)
+            }
+            VStack(alignment: .leading, spacing: 18) {
+                reviewStep("1", title: "Find candidates", detail: "Scan this vault, then read the notes in a group.")
+                reviewStep("2", title: model.authorityPolicyURL == nil ? "Choose what to keep" : "Inspect the signed decision",
+                           detail: model.authorityPolicyURL == nil ? "Make an explicit choice. Similar names or few links alone do not justify removal." : "Review the policy’s question, evidence and any holds.")
+                reviewStep("3", title: "Review the exact changes", detail: "Inspect retirements and link updates before you approve. Preservation holds remain in force.")
+            }
             if model.authorityPolicyURL != nil { workflowRequirements }
             else {
-                callout("Local review with recovery", text: "Ordinary vault folders can use local review. Planisphere preserves a Markdown checkpoint before applying and records the outcome on this Mac. Local approval does not create a signed authority record.", symbol: "clock.arrow.circlepath", color: .secondary)
+                Label("Local approval · recovery checkpoints · no Git required", systemImage: "clock.arrow.circlepath")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(26).frame(maxWidth: .infinity, alignment: .leading)
+        .background(PSStyle.surface, in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(PSStyle.border, lineWidth: 1))
+    }
+
+    private func reviewStep(_ number: String, title: String, detail: String) -> some View {
+        HStack(alignment: .top, spacing: 13) {
+            Text(number).font(.system(size: 11, weight: .semibold)).foregroundStyle(PSStyle.accent)
+                .frame(width: 24, height: 24).background(PSStyle.accent.opacity(0.08), in: Circle())
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.system(size: 13, weight: .semibold))
+                Text(detail).font(.caption).foregroundStyle(.secondary).lineSpacing(3)
             }
         }
     }
 
     private func scanCoverage(_ scan: PruningScan) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Scan coverage", systemImage: "folder.badge.magnifyingglass").font(.headline)
-            Text("Candidate discovery inspected \(scan.notes) Markdown notes in this folder, using the exclusions below. This is not a full-vault safety check or permission to apply changes.")
+            Label("\(scan.notes.formatted()) notes inspected · \(scan.scope.excludedCount.formatted()) locations excluded", systemImage: "folder.badge.magnifyingglass")
+                .font(.system(size: 12, weight: .medium))
+            Text("Discovery only. This scan does not verify the whole vault or approve changes.")
                 .font(.caption).foregroundStyle(.secondary).lineSpacing(3)
             if !scan.scope.unsupportedFilters.isEmpty {
                 Label("Some Obsidian exclusions could not be applied. Review the scope details.", systemImage: "exclamationmark.circle")
                     .font(.caption).foregroundStyle(.orange)
             }
-            DisclosureGroup("\(scan.scope.excludedCount) excluded locations · scope details") {
+            DisclosureGroup("Scope & exclusions") {
                 VStack(alignment: .leading, spacing: 13) {
                     Text("A listed folder includes its contents. Counts describe skipped locations, not the number of files inside those folders.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -232,8 +271,9 @@ struct PruningView: View {
             }
             .font(.caption)
         }
-        .padding(13).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 9))
+        .padding(16).frame(maxWidth: .infinity, alignment: .leading)
+        .background(PSStyle.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(PSStyle.border, lineWidth: 1))
     }
 
     private func scopeLines(_ title: String, _ lines: [String]) -> some View {
@@ -248,10 +288,10 @@ struct PruningView: View {
     }
 
     private func groupDetail(_ group: PruningGroup) -> some View {
-        VStack(alignment: .leading, spacing: 17) {
+        VStack(alignment: .leading, spacing: 18) {
             sectionLabel("CANDIDATE GROUP")
             Text(group.candidateKey).font(.title2.weight(.semibold)).textSelection(.enabled)
-            Text("These notes were nominated by matching account names or declared copies. Their contents and authority still need review. Matching names alone do not authorize retiring a note.")
+            Text("These notes share an account name or declare a copy. Read them before choosing what to keep; a matching name alone does not justify retirement.")
                 .font(.callout).foregroundStyle(.secondary).lineSpacing(4)
             Text("\(group.members.count) members · \(group.declaredCopies) declared copies")
                 .font(.caption).foregroundStyle(.secondary)
@@ -265,15 +305,21 @@ struct PruningView: View {
                             Spacer(minLength: 0)
                             if model.selectedPruningNotePath == path { Image(systemName: "eye") }
                         }
-                        .padding(10)
-                        .background(Color.primary.opacity(model.selectedPruningNotePath == path ? 0.08 : 0.035), in: RoundedRectangle(cornerRadius: 7))
+                        .font(.system(size: 12, weight: .medium)).padding(12)
+                        .background(model.selectedPruningNotePath == path ? PSStyle.accent.opacity(0.07) : PSStyle.surface, in: RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(model.selectedPruningNotePath == path ? PSStyle.accent.opacity(0.25) : PSStyle.border, lineWidth: 1))
                     }
                     .buttonStyle(.plain).disabled(model.isBusy)
                     if model.authorityPolicyURL == nil {
-                        Button(model.selectedKeeperPath == path ? "Keeping" : "Keep This Note") { model.chooseKeeper(path) }
-                            .buttonStyle(.bordered)
-                            .tint(model.selectedKeeperPath == path ? .accentColor : .secondary)
+                        Button { model.chooseKeeper(path) } label: {
+                            HStack(spacing: 5) {
+                                if model.selectedKeeperPath == path { Image(systemName: "checkmark") }
+                                Text(model.selectedKeeperPath == path ? "Keeping" : "Keep")
+                            }
+                        }
+                            .buttonStyle(PSButtonStyle(primary: model.selectedKeeperPath == path))
                             .disabled(model.isBusy)
+                            .accessibilityLabel("Keep \(path)")
                             .accessibilityIdentifier("keep-note-\(path)")
                     }
                     }
@@ -293,7 +339,7 @@ struct PruningView: View {
                     localPacketDetail(packet)
                 } else {
                     Button("Review Changes", systemImage: "doc.text.magnifyingglass") { model.prepareLocalPruning() }
-                        .buttonStyle(.borderedProminent).disabled(!model.canPrepareLocalPruning)
+                        .buttonStyle(PSButtonStyle(primary: true)).disabled(!model.canPrepareLocalPruning)
                         .accessibilityIdentifier("prepare-local-pruning")
                     Text("No files change during review. The proposal must preserve evidence and resolve affected links safely before it can be applied.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -328,7 +374,9 @@ struct PruningView: View {
             Text("This proposal affects the reviewed Markdown scope. Attachments, settings and excluded folders are outside its recovery checkpoint. Retirements remove files from the working folder after their pre-change versions are saved locally.")
                 .font(.caption).foregroundStyle(.secondary).lineSpacing(3)
             if !packet.limitations.isEmpty {
-                scopeLines("Review limits", packet.limitations)
+                DisclosureGroup("Review scope & limits") {
+                    scopeLines("Review limits", packet.limitations).padding(.top, 8)
+                }.font(.caption)
             }
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(packet.changes) { change in
@@ -340,8 +388,9 @@ struct PruningView: View {
                             Spacer(minLength: 0)
                             Text(change.isRetired ? "Retire" : "Update links").font(.caption).foregroundStyle(.secondary)
                         }
-                        .padding(9)
-                        .background(Color.primary.opacity(model.selectedLocalChangePath == change.path ? 0.08 : 0.025), in: RoundedRectangle(cornerRadius: 6))
+                        .font(.system(size: 12, weight: .medium)).padding(12)
+                        .background(model.selectedLocalChangePath == change.path ? PSStyle.accent.opacity(0.07) : PSStyle.surface, in: RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(model.selectedLocalChangePath == change.path ? PSStyle.accent.opacity(0.25) : PSStyle.border, lineWidth: 1))
                     }.buttonStyle(.plain).disabled(model.isBusy)
                 }
             }
@@ -352,9 +401,11 @@ struct PruningView: View {
                 sectionLabel("AFTER")
                 sourceText(change.isRetired ? "This note will be retired from the working folder." : change.after ?? "No readable result.")
             }
-            labeledText("Review fingerprint", packet.digest)
+            DisclosureGroup("Review fingerprint") {
+                labeledText("Exact local proposal", packet.digest).padding(.top, 8)
+            }.font(.caption).foregroundStyle(.secondary)
             Button("Apply Reviewed Changes", systemImage: "checkmark.shield") { confirmApply = true }
-                .buttonStyle(.borderedProminent).disabled(!model.canApplyLocalPruning)
+                .buttonStyle(PSButtonStyle(primary: true)).disabled(!model.canApplyLocalPruning)
                 .accessibilityIdentifier("apply-local-pruning")
             Text("Your next confirmation approves these exact local changes. Freshness and preservation are checked again; checkpoints and a local operation record support recovery. Keep other editors idle while applying.")
                 .font(.caption).foregroundStyle(.secondary).lineSpacing(3)
@@ -364,8 +415,8 @@ struct PruningView: View {
     private func questionDetail(_ question: PruningQuestion) -> some View {
         VStack(alignment: .leading, spacing: 17) {
             sectionLabel("AUTHORITY QUESTION")
-            Text(question.scope).font(.title2.weight(.semibold)).textSelection(.enabled)
-            Text(question.question).font(.headline).textSelection(.enabled)
+            Text(question.question).font(.title2.weight(.semibold)).textSelection(.enabled)
+            Text(question.scope).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
             Label(questionState(question), systemImage: question.hold == nil ? "signature" : "pause.circle")
                 .font(.callout.weight(.medium))
             if let value = question.value {
@@ -390,7 +441,7 @@ struct PruningView: View {
             } else {
                 workflowRequirements
                 Button("Prepare Exact Changes", systemImage: "doc.text.magnifyingglass") { model.preparePruning() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(PSButtonStyle(primary: true))
                     .disabled(model.isBusy || model.pruningError != nil || model.authorityPolicyURL == nil || question.state != "resolved" || question.writeState != "needs_exact_write_permission")
                     .accessibilityIdentifier("prepare-pruning")
                 Text("Preparation reads the current files and checks prerequisites. It does not apply the changes or grant write permission.")
@@ -405,7 +456,9 @@ struct PruningView: View {
             Text("\(packet.changes.count) files in this packet").font(.headline)
             labeledText("Retained account", packet.value)
             labeledText("Valid until", packet.validUntil)
-            labeledText("Packet fingerprint", packet.digest)
+            DisclosureGroup("Packet fingerprint") {
+                labeledText("Exact signed-policy proposal", packet.digest).padding(.top, 8)
+            }.font(.caption).foregroundStyle(.secondary)
             Text("Review every change below. Retired files are removed from the working folder; the pre-change files remain in the recovery checkpoint.")
                 .font(.caption).foregroundStyle(.secondary).lineSpacing(3)
             VStack(alignment: .leading, spacing: 6) {
@@ -418,8 +471,9 @@ struct PruningView: View {
                             Spacer(minLength: 0)
                             Text(change.isRetired ? "Retire" : "Rewrite").font(.caption).foregroundStyle(.secondary)
                         }
-                        .padding(9)
-                        .background(Color.primary.opacity(model.selectedPruningChangePath == change.path ? 0.08 : 0.025), in: RoundedRectangle(cornerRadius: 6))
+                        .font(.system(size: 12, weight: .medium)).padding(12)
+                        .background(model.selectedPruningChangePath == change.path ? PSStyle.accent.opacity(0.07) : PSStyle.surface, in: RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(model.selectedPruningChangePath == change.path ? PSStyle.accent.opacity(0.25) : PSStyle.border, lineWidth: 1))
                     }
                     .buttonStyle(.plain).disabled(model.isBusy)
                 }
@@ -432,10 +486,12 @@ struct PruningView: View {
                 sourceText(change.isRetired ? "This file will be retired from the working folder." : change.after ?? "No readable text preview in this packet.")
             }
             Divider()
-            HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 10) {
                 Button("Export Review Packet…", systemImage: "square.and.arrow.up") { model.exportPruningPacket() }
+                    .buttonStyle(PSButtonStyle())
                     .accessibilityIdentifier("export-pruning-packet")
                 Button("Load Signed Permission…", systemImage: "signature") { model.choosePruningPermission() }
+                    .buttonStyle(PSButtonStyle())
                     .accessibilityIdentifier("choose-pruning-permission")
             }
             .disabled(model.isBusy)
@@ -447,7 +503,7 @@ struct PruningView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Button("Apply Reviewed Changes", systemImage: "checkmark.shield") { confirmApply = true }
-                .buttonStyle(.borderedProminent).disabled(!model.canApplyPruning)
+                .buttonStyle(PSButtonStyle(primary: true)).disabled(!model.canApplyPruning)
                 .accessibilityIdentifier("apply-pruning")
             Text("A local recovery checkpoint must succeed first. Grapheine checks the signature, exact packet and current files again before writing. Keep other editors idle while applying.")
                 .font(.caption).foregroundStyle(.secondary).lineSpacing(3)
@@ -484,20 +540,21 @@ struct PruningView: View {
     }
 
     private func sectionLabel(_ text: String) -> some View {
-        Text(text).font(.system(size: 10, weight: .semibold)).tracking(0.8).foregroundStyle(.secondary)
+        PSSectionLabel(title: text)
     }
 
     private func listRow(_ title: String, subtitle: String, symbol: String, selected: Bool) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: symbol).font(.system(size: 13)).padding(.top, 2)
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: symbol).font(.system(size: 13)).foregroundStyle(selected ? PSStyle.accent : .secondary).padding(.top, 2)
             VStack(alignment: .leading, spacing: 5) {
                 Text(title).font(.system(size: 12, weight: .medium)).lineLimit(3).multilineTextAlignment(.leading)
                 Text(subtitle).font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.leading)
             }
             Spacer(minLength: 0)
         }
-        .padding(9).frame(maxWidth: .infinity, alignment: .leading)
-        .background(selected ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 7))
+        .padding(11).frame(maxWidth: .infinity, alignment: .leading)
+        .background(selected ? PSStyle.accent.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? PSStyle.accent.opacity(0.18) : .clear, lineWidth: 1))
         .contentShape(Rectangle())
     }
 
@@ -518,17 +575,18 @@ struct PruningView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(13).frame(maxWidth: .infinity, alignment: .leading)
-        .background(color.opacity(0.065), in: RoundedRectangle(cornerRadius: 9))
+        .padding(16).frame(maxWidth: .infinity, alignment: .leading)
+        .background(color.opacity(0.055), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(color.opacity(0.1), lineWidth: 1))
     }
 
     private func sourceText(_ text: String) -> some View {
         ScrollView([.horizontal, .vertical]) {
-            Text(text).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .topLeading).padding(12)
+            Text(text).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .topLeading).padding(16)
         }
         .frame(height: 230)
-        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
-        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.primary.opacity(0.08), lineWidth: 1))
+        .background(PSStyle.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(PSStyle.border, lineWidth: 1))
     }
 }

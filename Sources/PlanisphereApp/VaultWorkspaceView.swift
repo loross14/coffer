@@ -5,17 +5,29 @@ struct VaultWorkspaceView: View {
     @Bindable var model: VaultAppModel
     @State private var confirmRemoval = false
     @State private var showSavedScope = false
+    @State private var showLocalInfo = false
+    @State private var previewAfter = true
+    @State private var changeQuery = ""
+    @FocusState private var changeSearchFocused: Bool
 
     var body: some View {
         GeometryReader { bounds in
             HStack(spacing: 0) {
-                sidebar.frame(width: 240, height: bounds.size.height, alignment: .top)
-                Divider()
-                workspace.frame(width: max(0, bounds.size.width - 241), height: bounds.size.height, alignment: .top)
+                if model.sidebarVisible {
+                    sidebar.frame(width: 216, height: bounds.size.height, alignment: .top)
+                    Divider()
+                }
+                workspace.frame(width: max(0, bounds.size.width - (model.sidebarVisible ? 217 : 0)), height: bounds.size.height, alignment: .top)
             }
             .frame(width: bounds.size.width, height: bounds.size.height)
         }
-        .tint(Color(red: 0.26, green: 0.39, blue: 0.72))
+        .tint(PSStyle.accent)
+        .accentColor(PSStyle.accent)
+        .disabled(model.commandPalettePresented)
+        .accessibilityHidden(model.commandPalettePresented)
+        .overlay {
+            if model.commandPalettePresented { WorkspaceCommandsView(model: model) }
+        }
         .sheet(isPresented: $model.checkpointReviewPresented) {
             CheckpointReviewView(model: model)
                 .interactiveDismissDisabled(model.isBusy)
@@ -38,6 +50,7 @@ struct VaultWorkspaceView: View {
         } message: {
             Text("Your folder and its local history will be kept. Add the same folder again to return to its history.")
         }
+        .onChange(of: confirmRemoval) { _, value in model.workspaceConfirmationPresented = value }
     }
 
     private var workspace: some View {
@@ -80,6 +93,12 @@ struct VaultWorkspaceView: View {
                     vaultDetail(vault).frame(minHeight: 0, maxHeight: .infinity)
                 } else {
                     welcome
+                        .overlay(alignment: .topLeading) {
+                            if !model.sidebarVisible {
+                                PSIconButton(symbol: "sidebar.left", help: "Show sidebar") { model.sidebarVisible = true }
+                                    .padding(12)
+                            }
+                        }
                 }
                 if model.isBusy {
                     Divider()
@@ -92,80 +111,111 @@ struct VaultWorkspaceView: View {
                     .padding(.horizontal, 24).padding(.vertical, 12)
                 }
             }
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(PSStyle.canvas)
     }
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 11) {
-                Image(systemName: "globe.americas.fill")
-                    .font(.system(size: 27, weight: .light)).foregroundStyle(.tint)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Planisphere").font(.headline)
-                    Text("Your vaults, on your Mac").font(.caption).foregroundStyle(.secondary)
-                }
+            HStack(spacing: 9) {
+                Image(nsImage: NSImage(named: NSImage.applicationIconName) ?? NSImage()).resizable().frame(width: 25, height: 25)
+                Text("Planisphere").font(.system(size: 14, weight: .semibold)).tracking(-0.3)
+                Spacer()
+                PSIconButton(symbol: "sidebar.left", help: "Hide sidebar · ⌘\\") { model.sidebarVisible = false }
             }
-            .padding(.horizontal, 18).padding(.top, 24).padding(.bottom, 27)
-            .fixedSize(horizontal: false, vertical: true)
+            .padding(.leading, 18).padding(.trailing, 10).frame(height: 56)
+
+            Button { model.toggleCommandPalette() } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: "magnifyingglass")
+                    Text("Go anywhere").font(.system(size: 12))
+                    Spacer()
+                    Text("⌘K").font(.system(size: 10, weight: .medium)).foregroundStyle(.tertiary)
+                }
+                .foregroundStyle(.secondary).padding(.horizontal, 11).frame(height: 34)
+                .background(PSStyle.surface.opacity(0.7), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(PSStyle.border))
+                .contentShape(Rectangle())
+            }.buttonStyle(.plain).disabled(!model.canNavigateWorkspace)
+            .padding(.horizontal, 12).padding(.bottom, 24)
+            .accessibilityLabel("Go anywhere, Command K")
+
+            VStack(spacing: 4) {
+                ForEach(VaultSurface.allCases, id: \.self) { surface in
+                    Button { model.selectedSurface = surface } label: {
+                        HStack(spacing: 11) {
+                            Image(systemName: surface.symbol).font(.system(size: 14)).frame(width: 20)
+                            Text(surface.rawValue).font(.system(size: 13, weight: model.selectedSurface == surface ? .semibold : .regular))
+                            Spacer()
+                            if model.selectedSurface == surface {
+                                Capsule().fill(PSStyle.accent).frame(width: 3, height: 16)
+                            }
+                        }
+                        .foregroundStyle(model.selectedSurface == surface ? Color.primary : Color.secondary)
+                        .padding(.horizontal, 12).frame(height: 38)
+                        .background(model.selectedSurface == surface ? PSStyle.accent.opacity(0.11) : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: 8))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).disabled(model.isBusy || model.selectedVault == nil)
+                    .accessibilityIdentifier("surface-\(surface.rawValue.lowercased())")
+                    .accessibilityAddTraits(model.selectedSurface == surface ? .isSelected : [])
+                }
+            }.padding(.horizontal, 10)
 
             HStack {
-                Text("VAULTS").font(.system(size: 10, weight: .semibold)).tracking(1.2).foregroundStyle(.secondary)
+                PSSectionLabel(title: "Your vaults")
                 Spacer()
-                Text("\(model.vaults.count)").font(.caption).foregroundStyle(.tertiary)
                 Menu {
                     Button("Add Existing Vault…", systemImage: "folder.badge.plus") { model.chooseExistingVault() }
                     Button("Create New Vault…", systemImage: "plus.square") { model.chooseNewVault() }
-                } label: {
-                    Image(systemName: "plus").font(.system(size: 13, weight: .medium))
-                }
-                .menuStyle(.borderlessButton).frame(width: 24, height: 24).disabled(model.isBusy)
-                .help("Add or create a local vault")
-            }
-            .padding(.horizontal, 18).padding(.bottom, 10)
-            .fixedSize(horizontal: false, vertical: true)
+                } label: { Image(systemName: "plus").font(.system(size: 12, weight: .medium)) }
+                .menuStyle(.borderlessButton).frame(width: 20).disabled(model.isBusy)
+                .help("Add or create a local vault").accessibilityLabel("Add a vault")
+            }.padding(.horizontal, 20).padding(.top, 30).padding(.bottom, 12)
 
             ScrollView {
-                LazyVStack(spacing: 4) {
+                LazyVStack(spacing: 3) {
                     ForEach(model.vaults) { vault in
                         Button { model.selectVault(vault.id) } label: {
                             HStack(spacing: 10) {
-                                Image(systemName: "folder.fill").font(.system(size: 17)).foregroundStyle(model.selectedVaultID == vault.id ? Color.accentColor : Color.secondary)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(vault.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                                    Text(vault.restoredFrom == nil ? "Local vault" : "Recovered copy").font(.caption2).foregroundStyle(.secondary)
-                                }
-                                Spacer(minLength: 2)
+                                Image(systemName: model.selectedVaultID == vault.id ? "folder.fill" : "folder")
+                                    .font(.system(size: 13)).foregroundStyle(model.selectedVaultID == vault.id ? PSStyle.accent : Color.secondary)
+                                Text(vault.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                                Spacer(minLength: 0)
                             }
-                            .padding(.horizontal, 11).padding(.vertical, 11)
+                            .padding(.horizontal, 12).frame(height: 36)
+                            .background(model.selectedVaultID == vault.id ? Color.primary.opacity(0.045) : Color.clear,
+                                        in: RoundedRectangle(cornerRadius: 8))
                             .contentShape(Rectangle())
-                            .background(model.selectedVaultID == vault.id ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
                         }
                         .buttonStyle(.plain).disabled(model.isBusy)
+                        .help(vault.path)
                         .accessibilityLabel("\(vault.name), local vault")
                         .accessibilityIdentifier("vault-row-\(vault.id.uuidString)")
                     }
-                }
-                .padding(.horizontal, 9)
-            }
-            .frame(minHeight: 0, maxHeight: .infinity)
+                }.padding(.horizontal, 10)
+            }.frame(minHeight: 0, maxHeight: .infinity)
 
-            VStack(alignment: .leading, spacing: 10) {
-                Label("Local by default", systemImage: "internaldrive").font(.system(size: 12, weight: .medium))
-                Text("No account. No uploads. Your history is stored on this Mac.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                Button("Show history location") { model.reveal(model.historyURL) }
-                    .buttonStyle(.link).font(.caption)
-                Divider().padding(.vertical, 5)
-                Label("Managed, when you choose", systemImage: "cloud")
-                    .font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
-                Text("Optional managed storage is planned. Nothing is uploaded by this app.")
-                    .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Button { showLocalInfo = true } label: {
+                HStack(spacing: 8) {
+                    Circle().fill(Color.green.opacity(0.8)).frame(width: 5, height: 5)
+                    Text("On your Mac").font(.system(size: 11, weight: .medium))
+                    Spacer()
+                    Image(systemName: "info.circle").font(.system(size: 11)).foregroundStyle(.tertiary)
+                }.foregroundStyle(.secondary).padding(18).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            .popover(isPresented: $showLocalInfo) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Label("Your vault stays yours", systemImage: "internaldrive").font(.headline)
+                    Text("Your notes and checkpoint history stay on this Mac. No account or Git repository is required.")
+                    Text("Managed storage will be optional. This app does not upload your vault.").foregroundStyle(.secondary)
+                    Button("Show History Location") { model.reveal(model.historyURL) }.buttonStyle(PSButtonStyle())
+                    Text("Keep a separate backup for device loss.").font(.caption).foregroundStyle(.secondary)
+                }.font(.callout).padding(22).frame(width: 300)
             }
-            .padding(18)
-            .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.45))
+        .background(PSStyle.sidebar)
     }
 
     private var welcome: some View {
@@ -175,7 +225,7 @@ struct VaultWorkspaceView: View {
                 .font(.system(size: 46, weight: .ultraLight)).foregroundStyle(.tint)
                 .padding(.bottom, 27)
             Text("A place for your vaults.\nA way back to your work.")
-                .font(.system(size: 35, weight: .semibold, design: .rounded)).tracking(-1.1)
+                .font(.system(size: 35, weight: .semibold)).tracking(-1.1)
                 .fixedSize(horizontal: false, vertical: true)
             Text("Keep working in your favorite editor. Planisphere keeps\nlocal checkpoints you can inspect, recover and take with you.")
                 .font(.system(size: 15)).foregroundStyle(.secondary).lineSpacing(5)
@@ -214,84 +264,68 @@ struct VaultWorkspaceView: View {
 
     private func vaultDetail(_ vault: VaultRecord) -> some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 7) {
-                        HStack(spacing: 10) {
-                            Text(vault.name).font(.system(size: 27, weight: .semibold)).lineLimit(1)
-                            Text("ON THIS MAC").font(.system(size: 9, weight: .semibold)).tracking(0.9)
-                                .foregroundStyle(.secondary).padding(.horizontal, 8).padding(.vertical, 5)
-                                .background(Color.primary.opacity(0.05), in: Capsule())
-                        }
-                        Text(vault.path).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
-                    }
-                    Spacer(minLength: 15)
-                    Menu {
-                        Button("Open in Finder", systemImage: "folder") { model.openSelectedVault() }
-                        Button("Open in Obsidian", systemImage: "arrow.up.forward.app") { model.openInObsidian() }
-                            .disabled(!model.canOpenObsidian)
-                    } label: { Label("Open Vault", systemImage: "arrow.up.forward.square") }
-                    Button("Export…", systemImage: "square.and.arrow.up") { model.exportVault() }
-                        .disabled(model.checkpoints.isEmpty || model.historyReadError != nil)
-                        .help(model.historyReadError != nil ? "Retry reading history before exporting." : model.checkpoints.isEmpty ? "Create a checkpoint before exporting." : "Export the latest saved checkpoint and retained history.")
-                        .accessibilityIdentifier("export-vault")
-                    Menu {
-                        Button("Remove from App…", systemImage: "minus.circle") { confirmRemoval = true }
-                    } label: { Image(systemName: "ellipsis") }
-                    .menuStyle(.borderlessButton).frame(width: 24, height: 24)
+            HStack(spacing: 12) {
+                if !model.sidebarVisible {
+                    PSIconButton(symbol: "sidebar.left", help: "Show sidebar · ⌘\\") { model.sidebarVisible = true }
                 }
-                .disabled(model.isBusy)
-
-                Picker("Vault workspace", selection: $model.selectedSurface) {
+                Menu {
+                    ForEach(model.vaults) { item in
+                        Button(item.name) { model.selectVault(item.id) }
+                    }
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: "folder").foregroundStyle(.secondary)
+                        Text(vault.name).fontWeight(.medium).lineLimit(1)
+                    }
+                }.menuStyle(.borderlessButton).frame(maxWidth: 240, alignment: .leading)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .help(vault.path).disabled(model.isBusy)
+                Text("/").foregroundStyle(.tertiary)
+                Menu {
                     ForEach(VaultSurface.allCases, id: \.self) { surface in
-                        Text(surface.rawValue).tag(surface)
+                        Button(surface.rawValue, systemImage: surface.symbol) { model.selectedSurface = surface }
                     }
-                }
-                .pickerStyle(.segmented).labelsHidden().frame(width: 300)
-                .disabled(model.isBusy)
-                .accessibilityIdentifier("vault-surface")
-
+                } label: { Text(model.selectedSurface.rawValue).fontWeight(.semibold) }
+                    .menuStyle(.borderlessButton).fixedSize().disabled(model.isBusy)
+                Spacer(minLength: 8)
                 if model.selectedSurface == .history {
-                HStack(spacing: 12) {
-                    Image(systemName: "bookmark").foregroundStyle(.secondary)
-                    TextField("Checkpoint message (optional)", text: $model.checkpointMessage)
-                        .textFieldStyle(.plain).onSubmit { model.createCheckpoint() }
-                        .accessibilityLabel("Checkpoint message")
-                        .accessibilityIdentifier("checkpoint-message")
-                    Button("Create Checkpoint", systemImage: "plus") { model.createCheckpoint() }
-                        .buttonStyle(.borderedProminent).controlSize(.large)
-                        .accessibilityIdentifier("create-checkpoint")
+                    Button("Checkpoint", systemImage: "plus") { model.createCheckpoint() }
+                        .buttonStyle(PSButtonStyle(primary: true))
+                        .disabled(model.isBusy || model.historyReadError != nil)
+                        .help("Review and create a checkpoint · ⌘S").accessibilityIdentifier("create-checkpoint")
                 }
-                .padding(11)
-                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.07), lineWidth: 1))
-                .disabled(model.isBusy || model.historyReadError != nil)
-                Text("Checkpoints are explicit. Edits since your last checkpoint are not yet in local history.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .padding(.top, -8)
-                }
+                Menu {
+                    Button("Open in Finder", systemImage: "folder") { model.openSelectedVault() }
+                    Button("Open in Obsidian", systemImage: "arrow.up.forward.app") { model.openInObsidian() }
+                        .disabled(!model.canOpenObsidian)
+                    Divider()
+                    Button("Export Vault…", systemImage: "square.and.arrow.up") { model.exportVault() }
+                        .disabled(model.checkpoints.isEmpty || model.historyReadError != nil)
+                    Button("Show History Location") { model.reveal(model.historyURL) }
+                    Divider()
+                    Button("Remove from App…", systemImage: "minus.circle") { confirmRemoval = true }
+                } label: { Image(systemName: "ellipsis").frame(width: 24, height: 24) }
+                    .menuStyle(.borderlessButton).frame(width: 24).disabled(model.isBusy)
+                    .accessibilityLabel("Vault actions")
             }
-            .padding(24)
-            .fixedSize(horizontal: false, vertical: true)
+            .font(.system(size: 12)).padding(.horizontal, 18).frame(height: 54)
+            .background(PSStyle.canvas)
             Divider()
             if model.selectedSurface == .graph {
-                VaultGraphView(vault: vault)
-                    .id(vault.id)
+                VaultGraphView(vault: vault).id(vault.id)
                     .frame(minHeight: 0, maxHeight: .infinity)
             } else if model.selectedSurface == .pruning {
-                PruningView(model: model)
-                    .frame(minHeight: 0, maxHeight: .infinity)
+                PruningView(model: model).frame(minHeight: 0, maxHeight: .infinity)
             } else if let historyError = model.historyReadError {
                 unavailableHistory(historyError)
             } else if model.checkpoints.isEmpty {
                 emptyHistory
             } else {
                 HStack(spacing: 0) {
-                    historyList.frame(width: 220)
+                    historyList.frame(width: 208)
                     Divider()
-                    checkpointDetail.frame(minWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .frame(minHeight: 0, maxHeight: .infinity)
+                    checkpointDetail.frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+                }.frame(minHeight: 0, maxHeight: .infinity)
             }
         }
     }
@@ -330,7 +364,7 @@ struct VaultWorkspaceView: View {
     private var historyList: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("HISTORY").font(.system(size: 10, weight: .semibold)).tracking(1)
+                PSSectionLabel(title: "Saved moments")
                 Spacer()
                 Text("\(model.checkpoints.count)").font(.caption)
             }
@@ -350,12 +384,10 @@ struct VaultWorkspaceView: View {
                                     .font(.caption2).foregroundStyle(.secondary)
                                 Text("\(model.checkpointContentSummary(checkpoint)) · \(bytes(checkpoint.totalBytes))")
                                     .font(.caption2).foregroundStyle(.secondary)
-                                Text(model.checkpointModeTitle(checkpoint.captureScope?.mode ?? .wholeFolder))
-                                    .font(.caption2).foregroundStyle(.secondary)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(12).contentShape(Rectangle())
-                            .background(model.selectedCheckpointID == checkpoint.id ? Color.accentColor.opacity(0.10) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                            .background(model.selectedCheckpointID == checkpoint.id ? PSStyle.accent.opacity(0.10) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
                         }
                         .buttonStyle(.plain).disabled(model.isBusy)
                         .accessibilityIdentifier("checkpoint-\(checkpoint.id.uuidString)")
@@ -364,7 +396,7 @@ struct VaultWorkspaceView: View {
                 .padding(.horizontal, 8).padding(.bottom, 12)
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.4))
+        .background(PSStyle.surface.opacity(0.4))
         .accessibilityIdentifier("checkpoint-history")
     }
 
@@ -373,21 +405,31 @@ struct VaultWorkspaceView: View {
             if let checkpoint = model.selectedCheckpoint {
                 HStack {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(checkpoint.parentID == nil ? "First checkpoint" : "Changes from previous checkpoint")
-                            .font(.system(size: 13, weight: .semibold))
-                        Text("\(model.changes.count) changed items · saved locally")
-                            .font(.caption).foregroundStyle(.secondary)
+                        Text(checkpoint.message.isEmpty ? "Checkpoint" : checkpoint.message)
+                            .font(.system(size: 18, weight: .semibold)).tracking(-0.4).lineLimit(2)
+                        Text("\(model.changes.count) changed \(model.changes.count == 1 ? "item" : "items") · \(checkpoint.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                        Text(checkpoint.parentID == nil ? "First saved moment" : "Compared with the previous checkpoint")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
                         if checkpoint.captureScope != nil {
-                            Text("Excluded content is not in this checkpoint. Saving does not remove working files.")
-                                .font(.caption).foregroundStyle(.secondary)
+                            Text("Saving excludes files without deleting them from your vault.")
+                                .font(.system(size: 10)).foregroundStyle(.secondary)
                         }
                     }
                     Spacer()
                     if let scope = checkpoint.captureScope {
-                        Button("Saved Exclusions") { showSavedScope = true }
+                        Button(model.checkpointModeTitle(scope.mode)) { showSavedScope = true }
+                            .font(.system(size: 10, weight: .medium)).buttonStyle(.plain)
+                            .padding(.horizontal, 8).padding(.vertical, 6)
+                            .background(PSStyle.accent.opacity(0.08), in: Capsule())
+                            .help("Saved capture scope and exclusions")
+                            .accessibilityLabel("\(model.checkpointModeTitle(scope.mode)), saved scope and exclusions")
                             .popover(isPresented: $showSavedScope) { savedScope(scope) }
+                    } else {
+                        Text("Whole Folder").font(.system(size: 10)).foregroundStyle(.secondary)
                     }
                     Button("Restore Copy…", systemImage: "arrow.uturn.backward") { model.restoreCopy() }
+                        .buttonStyle(PSButtonStyle()).fixedSize()
                         .disabled(model.isBusy)
                         .accessibilityIdentifier("restore-copy")
                 }
@@ -403,9 +445,9 @@ struct VaultWorkspaceView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     HStack(spacing: 0) {
-                        changesList.frame(width: 200)
+                        changesList.frame(width: 192)
                         Divider()
-                        filePreview.frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+                        filePreview.frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
                     }
                     .frame(minHeight: 0, maxHeight: .infinity)
                 }
@@ -416,9 +458,21 @@ struct VaultWorkspaceView: View {
     }
 
     private var changesList: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Find a changed file", text: $changeQuery)
+                    .textFieldStyle(.plain).focused($changeSearchFocused)
+                    .accessibilityIdentifier("changed-files-search")
+                if !changeQuery.isEmpty {
+                    Button { changeQuery = "" } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("Clear changed-file search")
+                }
+            }.font(.system(size: 11)).padding(12)
+            Divider()
         ScrollView {
             LazyVStack(spacing: 2) {
-                ForEach(model.changes) { change in
+                ForEach(model.changes.filter { changeQuery.isEmpty || $0.path.localizedCaseInsensitiveContains(changeQuery) }) { change in
                     Button { model.selectChange(change) } label: {
                         HStack(alignment: .top, spacing: 9) {
                             Image(systemName: changeSymbol(change.kind)).foregroundStyle(changeColor(change.kind))
@@ -442,6 +496,12 @@ struct VaultWorkspaceView: View {
             .padding(8)
         }
         .accessibilityIdentifier("changed-files")
+        }
+        .background {
+            Button("Find a changed file") { changeSearchFocused = true }
+                .keyboardShortcut("f", modifiers: .command).hidden().accessibilityHidden(true)
+        }
+        .onChange(of: model.selectedCheckpointID) { _, _ in changeQuery = "" }
     }
 
     private func savedScope(_ scope: CheckpointScope) -> some View {
@@ -470,30 +530,50 @@ struct VaultWorkspaceView: View {
     private var filePreview: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let change = model.selectedChange {
-                HStack {
-                    Image(systemName: entrySymbol(change.newEntry ?? change.oldEntry))
-                    Text(change.path).lineLimit(2).textSelection(.enabled)
-                    Spacer(minLength: 0)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 8) {
+                        Image(systemName: entrySymbol(change.newEntry ?? change.oldEntry)).foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text((change.path as NSString).lastPathComponent).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                            Text(change.path).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                        }
+                        Spacer(minLength: 0)
+                    }.textSelection(.enabled)
+                    HStack {
+                        Picker("File version", selection: $previewAfter) {
+                            Text("Before").tag(false)
+                            Text("After").tag(true)
+                        }.pickerStyle(.segmented).labelsHidden().frame(width: 152)
+                        Spacer()
+                        Text(change.kind.rawValue.capitalized).font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(changeColor(change.kind)).padding(.horizontal, 7).padding(.vertical, 4)
+                            .background(changeColor(change.kind).opacity(0.08), in: Capsule())
+                    }
                 }
-                .font(.system(size: 12, weight: .medium)).padding(16)
-                .fixedSize(horizontal: false, vertical: true)
+                .padding(16).fixedSize(horizontal: false, vertical: true)
                 Divider()
                 GeometryReader { bounds in
-                    ScrollView([.vertical, .horizontal]) {
-                        VStack(alignment: .leading, spacing: 22) {
-                            textVersion(title: "BEFORE", text: model.beforeText, entry: change.oldEntry, absent: "Not present in the previous checkpoint")
-                            Divider()
-                            textVersion(title: "AFTER", text: model.afterText, entry: change.newEntry, absent: "Not present in this checkpoint")
+                    ScrollView(.vertical) {
+                        Group {
+                            if previewAfter {
+                                textVersion(title: "THIS CHECKPOINT", text: model.afterText, entry: change.newEntry, absent: "Not present in this checkpoint")
+                            } else {
+                                textVersion(title: "PREVIOUS CHECKPOINT", text: model.beforeText, entry: change.oldEntry, absent: "Not present in the previous checkpoint")
+                            }
                         }
-                        .padding(18)
-                        .frame(minWidth: bounds.size.width, minHeight: bounds.size.height, alignment: .topLeading)
-                    }
-                    .background(Color(nsColor: .textBackgroundColor))
+                        .padding(22)
+                        .frame(width: bounds.size.width, alignment: .topLeading)
+                    }.background(PSStyle.surface)
                 }
             } else {
-                Text("Select a file to inspect its versions.").font(.callout).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(spacing: 12) {
+                    Image(systemName: "doc.text.magnifyingglass").font(.system(size: 30, weight: .ultraLight))
+                    Text("Choose a file to read its versions.").font(.callout)
+                }.foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        }
+        .onChange(of: "\(model.selectedCheckpointID?.uuidString ?? "")/\(model.selectedChangePath ?? "")", initial: true) { _, _ in
+            previewAfter = model.selectedChange?.kind != .deleted
         }
         .accessibilityIdentifier("file-preview")
     }
@@ -511,9 +591,9 @@ struct VaultWorkspaceView: View {
             }
             if let text {
                 Text(text.isEmpty ? "Empty file" : text)
-                    .font(.system(size: 12, design: .monospaced)).lineSpacing(4)
+                    .font(.system(size: 12, design: .monospaced)).lineSpacing(5)
                     .foregroundStyle(text.isEmpty ? .secondary : .primary)
-                    .textSelection(.enabled).fixedSize(horizontal: true, vertical: true)
+                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             } else {
                 Text(entry == nil ? absent : entry?.kind == .directory ? "Folder" : entry?.kind == .symbolicLink ? "The target has no text preview. Its exact bytes are preserved in the checkpoint." : "No text preview. Binary or larger files are preserved in the checkpoint.")
                     .font(.callout).foregroundStyle(.secondary).frame(maxWidth: 310, alignment: .leading)
