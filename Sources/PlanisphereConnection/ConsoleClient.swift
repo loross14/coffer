@@ -22,7 +22,7 @@ public struct ConnectionIdentity: Codable, Sendable, Equatable {
     public let id: String
     public let label: String
     public let workspace: Workspace
-    public let email: String
+    public let email: String?
     public let expires_at: String
     public let permissions: [String]
     public let vault_sync_enabled: Bool

@@ -13,11 +13,16 @@ struct ConsoleConnectionView: View {
             if let identity = connection.credential?.connection {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(identity.workspace.name).font(.headline)
-                    Text(identity.email).foregroundStyle(.secondary)
-                    Label(connection.verified ? "Connected" : connection.needsSignIn ? "Reconnect needed" : "Connection not checked",
+                    if let email = identity.email, !email.isEmpty {
+                        Text(email).foregroundStyle(.secondary)
+                    }
+                    Label(connection.verified ? "Connected" : connection.needsSignIn ? "Reconnect needed" : connection.busy ? "Checking connection…" : "Connection not checked",
                           systemImage: connection.verified ? "checkmark.circle" : "exclamationmark.circle")
                 }
-                Text("Your account is connected. Vault files, checkpoints and policies are not synced yet.")
+                Text(connection.verified ? "Your account is connected. Vault files, checkpoints and policies stay on this Mac." :
+                     connection.needsSignIn ? "Sign in again to reconnect this Mac to your account. Your local vaults are ready to use." :
+                     connection.busy ? "Checking your saved account connection…" :
+                     "Your saved account could not be checked. Try again when you are online. Your local vaults are ready to use.")
             } else {
                 Text("Connect this Mac to your Planisphere workspace. Sign in and choose your workspace in the browser, then return here.")
                 Text("This first step connects your account. Your vaults and checkpoint history stay on your Mac.").foregroundStyle(.secondary)
@@ -31,7 +36,12 @@ struct ConsoleConnectionView: View {
                 if connection.credential == nil {
                     Button("Connect to Console") { Task { await connection.connect() } }.buttonStyle(PSButtonStyle(primary: true)).disabled(connection.busy)
                 } else {
-                    Button("Check Connection") { Task { await connection.refresh() } }.buttonStyle(PSButtonStyle()).disabled(connection.busy)
+                    if connection.needsSignIn {
+                        Button("Sign in Again") { Task { await connection.reconnect() } }
+                            .buttonStyle(PSButtonStyle(primary: true)).disabled(connection.busy)
+                    } else {
+                        Button("Check Connection") { Task { await connection.refresh() } }.buttonStyle(PSButtonStyle()).disabled(connection.busy)
+                    }
                     Button("Disconnect") { Task { await connection.disconnect() } }.buttonStyle(PSButtonStyle()).disabled(connection.busy)
                 }
                 if connection.canCancelSignIn { Button("Cancel Sign-in") { connection.cancel() } }

@@ -1,7 +1,13 @@
 import Foundation
 import Security
 
-public struct ConnectionKeychain {
+public protocol ConnectionCredentialStoring {
+    func read() throws -> ConnectionCredential?
+    func save(_ value: ConnectionCredential) throws
+    func remove() throws
+}
+
+public struct ConnectionKeychain: ConnectionCredentialStoring {
     // One fixed origin per credential. No credential follows configurable server addresses.
     private let query: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,

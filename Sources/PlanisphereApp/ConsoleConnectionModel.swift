@@ -18,8 +18,17 @@ final class ConsoleConnectionModel: NSObject, ASWebAuthenticationPresentationCon
     private(set) var message: String?
     private var loaded = false
     private var session: ASWebAuthenticationSession?
-    private let client = ConsoleClient()
-    private let keychain = ConnectionKeychain()
+    private let client: ConsoleClient
+    private let keychain: any ConnectionCredentialStoring
+    private let authenticate: (@MainActor (URL) async throws -> URL)?
+
+    init(client: ConsoleClient = ConsoleClient(), keychain: any ConnectionCredentialStoring = ConnectionKeychain(),
+         authenticate: (@MainActor (URL) async throws -> URL)? = nil) {
+        self.client = client
+        self.keychain = keychain
+        self.authenticate = authenticate
+        super.init()
+    }
 
     var title: String { credential?.connection.workspace.name ?? "Connect to Console" }
     var canCancelSignIn: Bool { session != nil }
@@ -38,17 +47,22 @@ final class ConsoleConnectionModel: NSObject, ASWebAuthenticationPresentationCon
         do {
             let attempt = try ConnectionAttempt()
             let url = try await client.begin(attempt)
-            let callback: URL = try await withCheckedThrowingContinuation { continuation in
-                let authentication = ASWebAuthenticationSession(url: url, callbackURLScheme: "ooo.planisphere.mac") { url, error in
-                    if let url { continuation.resume(returning: url) }
-                    else { continuation.resume(throwing: error ?? ConnectionError.invalidResponse) }
-                }
-                authentication.presentationContextProvider = self
-                authentication.prefersEphemeralWebBrowserSession = false
-                session = authentication
-                if !authentication.start() {
-                    session = nil
-                    continuation.resume(throwing: ConnectionError.unavailable)
+            let callback: URL
+            if let authenticate {
+                callback = try await authenticate(url)
+            } else {
+                callback = try await withCheckedThrowingContinuation { continuation in
+                    let authentication = ASWebAuthenticationSession(url: url, callbackURLScheme: "ooo.planisphere.mac") { url, error in
+                        if let url { continuation.resume(returning: url) }
+                        else { continuation.resume(throwing: error ?? ConnectionError.invalidResponse) }
+                    }
+                    authentication.presentationContextProvider = self
+                    authentication.prefersEphemeralWebBrowserSession = false
+                    session = authentication
+                    if !authentication.start() {
+                        session = nil
+                        continuation.resume(throwing: ConnectionError.unavailable)
+                    }
                 }
             }
             let code = try attempt.code(from: callback)
@@ -57,7 +71,7 @@ final class ConsoleConnectionModel: NSObject, ASWebAuthenticationPresentationCon
             // so the user can revoke it instead of losing the only local handle.
             credential = saved; verified = true; needsSignIn = false
             try keychain.save(saved)
-            message = "Connected. Vault syncing is the next step."
+            message = "Connected. Your vaults and history stay on this Mac."
         } catch let error as ASWebAuthenticationSessionError where error.code == .canceledLogin {
             message = "Connection cancelled. Your local vaults are ready to use."
         } catch { message = error.localizedDescription }
@@ -73,7 +87,7 @@ final class ConsoleConnectionModel: NSObject, ASWebAuthenticationPresentationCon
             value.connection = try await client.status(value.token)
             credential = value; verified = true; needsSignIn = false
             try keychain.save(value)
-            message = "Connection checked. Vault syncing is the next step."
+            message = "Connection checked. Your vaults and history stay on this Mac."
         } catch {
             verified = false
             needsSignIn = (error as? ConnectionError) == .signInAgain
@@ -95,6 +109,14 @@ final class ConsoleConnectionModel: NSObject, ASWebAuthenticationPresentationCon
             message = "Disconnect did not finish. The saved connection is kept so you can retry. " + error.localizedDescription
         }
         busy = false
+    }
+
+    func reconnect() async {
+        guard !busy, needsSignIn else { return }
+        await disconnect()
+        // Keep the existing credential if revocation fails, so it remains retryable.
+        guard credential == nil else { return }
+        await connect()
     }
 
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {

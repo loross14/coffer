@@ -3,6 +3,19 @@ import XCTest
 @testable import PlanisphereConnection
 
 final class ConsoleClientTests: XCTestCase {
+    func testAccountWithoutEmailCanConnectAndRestoreFromKeychainData() async throws {
+        let payload = Data(#"{"token":"ps_mac_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","connection":{"id":"device","label":"Planisphere on Mac","workspace":{"id":"workspace","name":"My workspace"},"email":null,"expires_at":"2026-11-10T12:00:00Z","permissions":["connection:read","connection:revoke"],"vault_sync_enabled":false}}"#.utf8)
+        let client = ConsoleClient { request in
+            (payload, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let value = try await client.exchange(String(repeating: "c", count: 43), attempt: ConnectionAttempt())
+        XCTAssertNil(value.connection.email)
+        XCTAssertEqual(value.connection.workspace.name, "My workspace")
+        let restored = try JSONDecoder().decode(ConnectionCredential.self, from: JSONEncoder().encode(value))
+        XCTAssertEqual(restored.connection, value.connection)
+        XCTAssertEqual(restored.token, value.token)
+    }
+
     func testPKCEKnownVector() throws {
         let attempt = ConnectionAttempt(verifier: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk", state: "test")
         XCTAssertEqual(attempt.challenge, "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")

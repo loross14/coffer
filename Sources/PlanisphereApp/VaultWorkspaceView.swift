@@ -54,6 +54,9 @@ struct VaultWorkspaceView: View {
             Text("Your folder and its local history will be kept. Add the same folder again to return to its history.")
         }
         .onChange(of: confirmRemoval) { _, value in model.workspaceConfirmationPresented = value }
+        .task {
+            if ConsoleConnectionModel.isAvailable { await model.console.load() }
+        }
     }
 
     private var workspace: some View {

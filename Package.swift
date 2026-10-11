@@ -21,6 +21,7 @@ let package = Package(
         .executableTarget(name: "PlanisphereApp", dependencies: ["PlanisphereCore", "PlanisphereGrapheine", "PlanisphereGraph", "PlanisphereConnection", "Sparkle"],
                           linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
         .testTarget(name: "PlanisphereConnectionTests", dependencies: ["PlanisphereConnection"]),
+        .testTarget(name: "PlanisphereAppTests", dependencies: ["PlanisphereApp", "PlanisphereConnection"]),
         .testTarget(name: "PlanisphereGraphTests", dependencies: ["PlanisphereGraph"]),
         .testTarget(name: "PlanisphereGrapheineTests", dependencies: ["PlanisphereGrapheine"]),
         .testTarget(name: "PlanisphereCoreTests", dependencies: ["PlanisphereCore"]),
