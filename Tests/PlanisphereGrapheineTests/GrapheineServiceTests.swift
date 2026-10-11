@@ -3,6 +3,15 @@ import XCTest
 @testable import PlanisphereGrapheine
 
 final class GrapheineServiceTests: XCTestCase, @unchecked Sendable {
+    func testPackagedRuntimeCannotBeReplacedByHostOverride() {
+        let helper = URL(fileURLWithPath: "/Applications/Planisphere.app/Contents/Resources/Grapheine")
+        let runtime = GrapheineService.runtimeURL(bundledHelperDirectory: helper,
+            environment: ["PLANISPHERE_PYTHON": "/untrusted/python"])
+        XCTAssertEqual(runtime.path, "/Applications/Planisphere.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3.13")
+        XCTAssertEqual(GrapheineService.runtimeURL(bundledHelperDirectory: nil,
+            environment: ["PLANISPHERE_PYTHON": "/development/python"]).path, "/development/python")
+    }
+
     func testRealBridgeScanUsesSelectedFolderAndTypedContract() async throws {
         let temporary = URL(fileURLWithPath: "/private/tmp", isDirectory: true).appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: temporary.appendingPathComponent("Archive"), withIntermediateDirectories: true)

@@ -12,10 +12,20 @@ public actor GrapheineService {
         let environment = ProcessInfo.processInfo.environment
         let checkout = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let bundled = Bundle.main.resourceURL?.appendingPathComponent("Grapheine", isDirectory: true)
-        let resources = bundled.flatMap { FileManager.default.fileExists(atPath: $0.appendingPathComponent("bridge.py").path) ? $0 : nil }
+        let resources = Bundle.main.bundleURL.pathExtension == "app" ? bundled : nil
         helperURL = resources?.appendingPathComponent("bridge.py") ?? checkout.appendingPathComponent("Integrations/Grapheine/bridge.py")
         engineURL = resources?.appendingPathComponent("engine", isDirectory: true) ?? checkout.deletingLastPathComponent().appendingPathComponent("Grapheine", isDirectory: true)
-        pythonURL = URL(fileURLWithPath: environment["PLANISPHERE_PYTHON"] ?? "/usr/bin/python3")
+        pythonURL = Self.runtimeURL(bundledHelperDirectory: resources, environment: environment)
+    }
+
+    internal nonisolated static func runtimeURL(bundledHelperDirectory: URL?, environment: [String: String]) -> URL {
+        if let bundledHelperDirectory {
+            // A packaged app must use its signed runtime, including when that
+            // runtime is missing or damaged. Never silently use a host install.
+            return bundledHelperDirectory.deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Frameworks/Python.framework/Versions/Current/bin/python3.13")
+        }
+        return URL(fileURLWithPath: environment["PLANISPHERE_PYTHON"] ?? "/usr/bin/python3")
     }
 
     internal init(helperURL: URL, engineURL: URL, pythonURL: URL) {
@@ -251,7 +261,7 @@ public actor GrapheineService {
         if !applying { try Task.checkCancellation() }
         guard FileManager.default.isExecutableFile(atPath: python.path), FileManager.default.fileExists(atPath: helper.path),
               FileManager.default.fileExists(atPath: engine.appendingPathComponent("grapheine_authority.py").path) else {
-            throw GrapheineError.unavailable("Grapheine is unavailable. This build needs its bundled engine and Python 3.9 or later. Your vault has not changed.")
+            throw GrapheineError.unavailable("Grapheine is unavailable. This copy of Planisphere is missing part of its bundled engine. Reinstall the app and try again. Your vault has not changed.")
         }
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -262,7 +272,9 @@ public actor GrapheineService {
         defer { try? output.close(); try? errors.close() }
         let process = Process()
         process.executableURL = python
-        process.arguments = ["-B"] + arguments
+        // Ignore host Python settings and user-installed modules while retaining
+        // the signed bridge's sibling imports. UTF-8 is independent of locale.
+        process.arguments = ["-B", "-s", "-E", "-X", "utf8"] + arguments
         var environment = ProcessInfo.processInfo.environment
         for key in environment.keys where key.hasPrefix("GIT_") || key.hasPrefix("PYTHON") || key.hasPrefix("GRAPHITE_") || key.hasPrefix("GRAPHEINE_") {
             environment.removeValue(forKey: key)
