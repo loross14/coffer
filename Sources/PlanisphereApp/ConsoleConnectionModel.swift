@@ -5,6 +5,11 @@ import PlanisphereConnection
 
 @MainActor @Observable
 final class ConsoleConnectionModel: NSObject, ASWebAuthenticationPresentationContextProviding {
+    // Enable only after the matching server routes have been deployed and verified.
+    static var isAvailable: Bool {
+        Bundle.main.object(forInfoDictionaryKey: "PlanisphereConsoleConnectionEnabled") as? Bool == true
+    }
+    static let consoleURL = ConsoleClient.production.appendingPathComponent("console")
     var presented = false
     private(set) var credential: ConnectionCredential?
     private(set) var busy = false

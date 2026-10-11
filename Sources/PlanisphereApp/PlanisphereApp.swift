@@ -27,8 +27,12 @@ struct PlanisphereApp: App {
                     .disabled(!model.canNavigateWorkspace || model.commandPalettePresented)
             }
             CommandMenu("Workspace") {
-                Button("Console Connection…") { model.console.presented = true }
-                    .disabled(!model.canNavigateWorkspace)
+                if ConsoleConnectionModel.isAvailable {
+                    Button("Console Connection…") { model.console.presented = true }
+                        .disabled(!model.canNavigateWorkspace)
+                } else {
+                    Link("Open Console in Browser", destination: ConsoleConnectionModel.consoleURL)
+                }
                 Button("Go Anywhere…") { model.toggleCommandPalette() }
                     .keyboardShortcut("k", modifiers: .command)
                     .disabled(!model.canNavigateWorkspace)

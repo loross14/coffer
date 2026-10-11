@@ -199,12 +199,21 @@ struct VaultWorkspaceView: View {
                 }.padding(.horizontal, 10)
             }.frame(minHeight: 0, maxHeight: .infinity)
 
-            Button { model.console.presented = true } label: {
-                Label(model.console.title, systemImage: "network")
-                    .font(.system(size: 12, weight: .medium)).lineLimit(1)
-                    .padding(.horizontal, 18).padding(.top, 12)
-            }.buttonStyle(.plain).disabled(!model.canNavigateWorkspace)
-            .accessibilityIdentifier("console-connection")
+            if ConsoleConnectionModel.isAvailable {
+                Button { model.console.presented = true } label: {
+                    Label(model.console.title, systemImage: "network")
+                        .font(.system(size: 12, weight: .medium)).lineLimit(1)
+                        .padding(.horizontal, 18).padding(.top, 12)
+                }.buttonStyle(.plain).disabled(!model.canNavigateWorkspace)
+                .accessibilityIdentifier("console-connection")
+            } else {
+                Link(destination: ConsoleConnectionModel.consoleURL) {
+                    Label("Open Console", systemImage: "arrow.up.right.square")
+                        .font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 18).padding(.top, 12)
+                }.buttonStyle(.plain).help("Open the Planisphere console in your browser")
+                .accessibilityIdentifier("open-console")
+            }
 
             Button { showLocalInfo = true } label: {
                 HStack(spacing: 8) {
