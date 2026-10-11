@@ -10,6 +10,7 @@ MACHO = {b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xcf\x
 
 def sign(app, identity):
     args = ["/usr/bin/codesign", "--force", "--sign", identity, "--options", "runtime",
+            "--preserve-metadata=identifier,entitlements", "--generate-entitlement-der",
             "--timestamp=none" if identity == "-" else "--timestamp"]
     files = sorted(app.rglob("*"), key=lambda path: len(path.parts), reverse=True)
     for path in files:

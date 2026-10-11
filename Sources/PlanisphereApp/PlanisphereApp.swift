@@ -4,6 +4,7 @@ import AppKit
 @main
 struct PlanisphereApp: App {
     @State private var model = VaultAppModel()
+    @StateObject private var updater = AppUpdater()
 
     var body: some Scene {
         WindowGroup("Planisphere") {
@@ -13,6 +14,10 @@ struct PlanisphereApp: App {
         }
         .defaultSize(width: 1320, height: 820)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { updater.checkForUpdates() }
+                    .disabled(!updater.canCheckForUpdates)
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Add Existing Vault…") { model.chooseExistingVault() }
                     .keyboardShortcut("o", modifiers: [.command])

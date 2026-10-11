@@ -175,7 +175,7 @@ def links(text):
     return result, unsupported
 
 
-def build_graph(texts, vault_path, *, node_limit=MAX_GRAPH_NODES, edge_limit=MAX_GRAPH_EDGES):
+def build_graph(texts, vault_path, *, node_limit=MAX_GRAPH_NODES, edge_limit=MAX_GRAPH_EDGES, formats=None, extra_links=None):
     paths = set(texts)
     by_name = defaultdict(set)
     for path in paths:
@@ -212,7 +212,11 @@ def build_graph(texts, vault_path, *, node_limit=MAX_GRAPH_NODES, edge_limit=MAX
         # Attachments do not become invented note nodes. Wikilinks may name a
         # real dotted stem, but only when it is present in the admitted set.
         missing_state = "ignored" if suffix and suffix != ".md" else "unresolved"
-        target = target if target.endswith(".md") else target + ".md"
+        # In document mode an explicit admitted file is a real target. Never
+        # discover or read a destination outside the already admitted inventory.
+        explicit = (posixpath.normpath(posixpath.join(posixpath.dirname(source), target)) in paths
+                    if kind == "markdown" else posixpath.normpath(target) in paths or target in by_name)
+        target = target if target.endswith(".md") or (formats and explicit) else target + ".md"
         if kind == "markdown" or target.startswith(("./", "../")):
             candidate = posixpath.normpath(posixpath.join(posixpath.dirname(source), target))
             return (candidate, "found") if candidate in paths else (None, missing_state)
@@ -228,7 +232,8 @@ def build_graph(texts, vault_path, *, node_limit=MAX_GRAPH_NODES, edge_limit=MAX
 
     occurrence_count = 0
     for source in sorted(paths):
-        occurrences, unknown = links(texts[source])
+        occurrences, unknown = links(texts[source]) if not formats or formats[source] == "markdown" else ([], 0)
+        occurrences += (extra_links or {}).get(source, [])
         occurrence_count += len(occurrences) + unknown
         if occurrence_count > MAX_LINK_OCCURRENCES:
             raise ValueError("Graph exceeds the supported 1,000,000 link occurrences. Narrow the vault's Markdown exclusions and try again.")
@@ -250,9 +255,12 @@ def build_graph(texts, vault_path, *, node_limit=MAX_GRAPH_NODES, edge_limit=MAX
     included = set(selected)
     shown_edges = sorted(pair for pair in edges if pair[0] in included and pair[1] in included)[:edge_limit]
     inbound, outbound = Counter(target for _, target in shown_edges), Counter(source for source, _ in shown_edges)
-    nodes = [{"id": path, "title": posixpath.basename(path)[:-3], "folder": posixpath.dirname(path),
+    nodes = [{"id": path, "title": posixpath.splitext(posixpath.basename(path))[0], "folder": posixpath.dirname(path),
               "degree": inbound[path] + outbound[path], "inDegree": inbound[path], "outDegree": outbound[path]} for path in selected]
     limitations = list(GRAPH_LIMITATIONS)
+    if formats:
+        limitations[0] = "Includes explicitly selected Markdown, TeX, PDF, code, text and HTML formats within the same Planisphere exclusions. Reading does not expand checkpoint or pruning scope."
+        limitations.append("Edges use explicit Markdown destinations and TeX references/includes. PDF and code contents do not create inferred dependency edges. TeX macros are not executed or expanded.")
     if len(selected) < len(paths):
         limitations.append(f"Showing the first {len(selected):,} of {len(paths):,} notes by exact path; remaining notes are omitted from this view.")
     if len(shown_edges) < len(edges):

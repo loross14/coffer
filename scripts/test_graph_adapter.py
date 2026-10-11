@@ -2,6 +2,7 @@
 """Fixture-only checks for read-only graph extraction; no live vault is opened."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import time
@@ -102,6 +103,88 @@ class GraphAdapterTests(unittest.TestCase):
         with patch.object(G, "MAX_LINK_OCCURRENCES", 2):
             with self.assertRaisesRegex(ValueError, "link occurrences"):
                 self.graph({"A.md": "[[B]] [[B]] [[B]]", "B.md": ""})
+
+    def test_document_graph_resolves_explicit_tex_and_does_not_invent_code_or_ambiguous_edges(self):
+        with tempfile.TemporaryDirectory(prefix="planisphere-doc-graph-", dir="/private/tmp") as tmp:
+            root = Path(tmp)
+            sources = {
+                "Read.md": "[code](model.py) [paper](paper.pdf)",
+                "Main.TEX": r"\input{proof}\ref{unique}\ref{duplicate}\ref{missing}" + "\n" + r"% \ref{commented}",
+                "proof.tex": r"\label{unique}\label{duplicate}",
+                "other.tex": r"\label{duplicate}",
+                "example.tex": r"\begin{verbatim}\ref{unique}\end{verbatim}",
+                "model.py": "# [[Read]]\nimport proof\n",
+                "paper.pdf": "%PDF- graph must not extract PDF text",
+            }
+            for name, body in sources.items():
+                (root / name).write_text(body)
+            graph, _ = B.load_engine(PROJECT.parent / "Grapheine")
+            result = B.graph_snapshot(graph, root, documents=True)
+            self.assertEqual({node["id"] for node in result["nodes"]}, set(sources))
+            self.assertEqual(self.pairs(result), {("Read.md", "model.py"), ("Read.md", "paper.pdf"), ("Main.TEX", "proof.tex")})
+            self.assertEqual(result["ambiguousLinkCount"], 1)
+            self.assertEqual(result["unresolvedLinkCount"], 1)
+            default = B.graph_snapshot(graph, root)
+            self.assertEqual({node["id"] for node in default["nodes"]}, {"Read.md"})
+            for name, body in sources.items():
+                self.assertEqual((root / name).read_text(), body)
+
+    def test_tex_literal_examples_do_not_create_links_or_label_owners(self):
+        literals = [r"\verb|\ref{target}|", r"\verb*+\input{Target}+", r"\\ref{target}",
+                    r"\begin{verbatim}\ref{target}", r"\begin{lstlisting}\ref{target}\end{lstlisting}",
+                    r"\begin{Verbatim}\ref{target}\end{Verbatim}",
+                    r"\begin{minted}{tex}\ref{target}\end{minted}",
+                    r"\\% \ref{target}", r"\verb%\ref{target}%", r"\verb|unclosed \ref{target}",
+                    r"\verb|\label{target}|", r"\\label{target}"]
+        with tempfile.TemporaryDirectory(prefix="planisphere-tex-literals-", dir="/private/tmp") as tmp:
+            root = Path(tmp)
+            (root / "Target.tex").write_text(r"\label{target}")
+            (root / "Real.tex").write_text(r"\% real percent \ref{target}" + "\n" + r"\\\ref{target}")
+            for index, literal in enumerate(literals):
+                (root / f"Example{index}.tex").write_text(literal)
+            graph, _ = B.load_engine(PROJECT.parent / "Grapheine")
+            result = B.graph_snapshot(graph, root, documents=True)
+            self.assertEqual(self.pairs(result), {("Real.tex", "Target.tex")})
+            self.assertEqual(result["ambiguousLinkCount"], 0)
+            self.assertEqual(result["unresolvedLinkCount"], 0)
+        # Real references following a closed literal or a newline remain visible.
+        for literal in [r"\verb|\ref{fake}|", r"\verb|unclosed", "% comment", r"\\% comment"]:
+            clean = B.tex_link_source(literal + "\n" + r"\ref{real}")
+            self.assertEqual([m[1] for m in graph.TEX_REF_RE.finditer(clean)], ["real"])
+
+    def test_tex_many_comments_and_literals_are_bounded(self):
+        source = (r"\verb|\ref{fake}| % \ref{fake}" + "\n") * 20000 + r"\ref{real}"
+        start = time.monotonic()
+        clean = B.tex_link_source(source)
+        self.assertEqual(clean.count(r"\ref"), 1)
+        self.assertEqual(len(clean), len(source))
+        self.assertLess(time.monotonic() - start, 5)
+
+    def test_failed_document_search_does_not_break_markdown_reading_or_pruning(self):
+        with tempfile.TemporaryDirectory(prefix="planisphere-reader-compat-", dir="/private/tmp") as tmp:
+            root = Path(tmp) / "vault"
+            root.mkdir()
+            sources = {"Read.md": "# Local note\nsafeneedle\n", "broken.pdf": "Not a PDF",
+                       "model.py": "raise RuntimeError('Source must never execute')"}
+            for name, body in sources.items():
+                (root / name).write_text(body)
+            graph, authority = B.load_engine(PROJECT.parent / "Grapheine")
+            with patch.dict(os.environ, {"PLANISPHERE_READER_CACHE": str(Path(tmp) / "cache")}):
+                for after_document_failure in (False, True):
+                    if after_document_failure:
+                        with self.assertRaisesRegex(Exception, "PDF"):
+                            B.document_operation(root, "search-documents", query="safeneedle")
+                    result = B.document_operation(root, "search-documents", query="safeneedle", documents=False)
+                    self.assertEqual([hit["path"] for hit in result["matches"]], ["Read.md"])
+                    read = B.document_operation(root, "read-document", path="Read.md", documents=False)
+                    self.assertEqual(read["body"], sources["Read.md"])
+                    self.assertEqual({node["id"] for node in B.graph_snapshot(graph, root)["nodes"]}, {"Read.md"})
+                    self.assertEqual(B.scan(graph, authority, root, None)["notes"], 1)
+                read = B.document_operation(root, "read-document", path="model.py")
+                self.assertEqual(read["body"], sources["model.py"])
+            self.assertEqual({p.name for p in root.iterdir()}, set(sources))
+            for name, body in sources.items():
+                self.assertEqual((root / name).read_text(), body)
 
     def test_bridge_scope_skips_hidden_dependencies_and_symlinks_without_authority_or_writes(self):
         with tempfile.TemporaryDirectory(prefix="planisphere-graph-test-", dir="/private/tmp") as tmp:

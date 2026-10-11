@@ -1,9 +1,23 @@
 import Foundation
 import Darwin
+import CryptoKit
 
 /// A fresh, explicitly scoped local toolkit process for every operation.
 /// No shell evaluation, network transport, key generation or Git initialization.
 public actor GrapheineService {
+    private static let documentFormats: [String: Set<String>] = [
+        "markdown": ["md"], "tex": ["tex", "bib"], "pdf": ["pdf"],
+        "text": ["txt", "rst"], "html": ["html", "htm", "css"],
+        "code": ["py", "pyi", "swift", "js", "jsx", "ts", "tsx", "mjs", "cjs", "c", "h", "cc", "cpp", "hpp", "rs", "go", "java", "kt", "rb", "sh", "bash", "zsh", "sql", "r", "scala", "cs", "lua"]
+    ]
+
+    private nonisolated static func format(for path: String, includeDocuments: Bool) -> String? {
+        let suffix = (path as NSString).pathExtension
+        if suffix.lowercased() == "md" { return suffix == "md" ? "markdown" : nil }
+        guard includeDocuments else { return nil }
+        return documentFormats.first { $0.value.contains(suffix.lowercased()) }?.key
+    }
+
     private let helperURL: URL
     private let engineURL: URL
     private let pythonURL: URL
@@ -14,7 +28,7 @@ public actor GrapheineService {
         let bundled = Bundle.main.resourceURL?.appendingPathComponent("Grapheine", isDirectory: true)
         let resources = Bundle.main.bundleURL.pathExtension == "app" ? bundled : nil
         helperURL = resources?.appendingPathComponent("bridge.py") ?? checkout.appendingPathComponent("Integrations/Grapheine/bridge.py")
-        engineURL = resources?.appendingPathComponent("engine", isDirectory: true) ?? checkout.deletingLastPathComponent().appendingPathComponent("Grapheine", isDirectory: true)
+        engineURL = resources?.appendingPathComponent("engine", isDirectory: true) ?? environment["PLANISPHERE_GRAPHEINE_SOURCE"].map { URL(fileURLWithPath: $0) } ?? checkout.deletingLastPathComponent().appendingPathComponent("Grapheine", isDirectory: true)
         pythonURL = Self.runtimeURL(bundledHelperDirectory: resources, environment: environment)
     }
 
@@ -39,12 +53,52 @@ public actor GrapheineService {
         return try Self.validatedScan(data, vaultURL: vaultURL)
     }
 
-    public func graph(vaultURL: URL) async throws -> GraphSnapshot {
-        let data = try await invoke("graph", vaultURL: vaultURL, policyURL: nil)
-        return try Self.validatedGraph(data, vaultURL: vaultURL)
+    public func graph(vaultURL: URL, includeDocuments: Bool = false) async throws -> GraphSnapshot {
+        let data = try await invoke(includeDocuments ? "graph-documents" : "graph", vaultURL: vaultURL, policyURL: nil)
+        return try Self.validatedGraph(data, vaultURL: vaultURL, includeDocuments: includeDocuments)
     }
 
-    internal nonisolated static func validatedGraph(_ data: Data, vaultURL: URL) throws -> GraphSnapshot {
+    public func readDocument(vaultURL: URL, path: String, location: DocumentLocation? = nil, includeDocuments: Bool = false) async throws -> DocumentRead {
+        try Self.validateRelativePath(path)
+        var args = ["--path", path]
+        if !includeDocuments { args.append("--markdown-only") }
+        if let page = location?.page { args += ["--page", String(page)] }
+        else if let line = location?.line { args += ["--line", String(line)] }
+        else { args += path.lowercased().hasSuffix(".pdf") ? ["--page", "1"] : ["--line", "1"] }
+        let data = try await invoke("read-document", vaultURL: vaultURL, policyURL: nil, arguments: args)
+        let read = try JSONDecoder().decode(DocumentRead.self, from: data)
+        guard read.root == vaultURL.path, read.path == path,
+              read.format == Self.format(for: path, includeDocuments: includeDocuments),
+              read.representation == (read.format == "pdf" ? "extracted_text" : "original_text"),
+              read.sha256.count == 64, read.sha256.allSatisfy({ "0123456789abcdef".contains($0) }),
+              read.body.utf8.count <= 48_000,
+              SHA256.hash(data: Data(read.body.utf8)).map({ String(format: "%02x", $0) }).joined() == read.body_sha256 else {
+            throw GrapheineError.invalidResponse("The document preview does not match the selected source.")
+        }
+        return read
+    }
+
+    public func searchDocuments(vaultURL: URL, query: String, includeDocuments: Bool = false) async throws -> DocumentSearch {
+        var args = ["--query", query]
+        if !includeDocuments { args.append("--markdown-only") }
+        let data = try await invoke("search-documents", vaultURL: vaultURL, policyURL: nil, arguments: args)
+        let result = try JSONDecoder().decode(DocumentSearch.self, from: data)
+        guard result.root == vaultURL.path, result.matches.count <= 60,
+              Set(result.matches.map(\.path)).count == result.matches.count else {
+            throw GrapheineError.invalidResponse("Search returned an invalid document scope.")
+        }
+        for match in result.matches {
+            try Self.validateRelativePath(match.path)
+            guard match.sha256.count == 64, match.sha256.allSatisfy({ "0123456789abcdef".contains($0) }),
+                  match.format == Self.format(for: match.path, includeDocuments: includeDocuments),
+                  match.snippet.count <= 320 else {
+                throw GrapheineError.invalidResponse("Search returned an incomplete source.")
+            }
+        }
+        return result
+    }
+
+    internal nonisolated static func validatedGraph(_ data: Data, vaultURL: URL, includeDocuments: Bool = false) throws -> GraphSnapshot {
         guard data.count <= 32 * 1024 * 1024 else {
             throw GrapheineError.invalidResponse("The graph report exceeds the supported size.")
         }
@@ -60,7 +114,7 @@ public actor GrapheineService {
               graph.limits.count <= 100, graph.limits.allSatisfy({ $0.utf8.count <= 4_096 }) else {
             throw GrapheineError.invalidResponse("The graph report has incomplete counts or belongs to another vault.")
         }
-        try validateScope(graph.scope)
+        try validateScope(graph.scope, includeDocuments: includeDocuments)
         let ids = Set(graph.nodes.map(\.id))
         guard ids.count == graph.nodes.count, Set(graph.edges).count == graph.edges.count else {
             throw GrapheineError.invalidResponse("The graph report contains duplicate notes or connections.")
@@ -78,7 +132,8 @@ public actor GrapheineService {
             let components = node.id.split(separator: "/").map(String.init)
             let basename = components.last ?? ""
             let folder = components.dropLast().joined(separator: "/")
-            guard node.id.utf8.count <= 4_096, node.id.hasSuffix(".md"), node.title == String(basename.dropLast(3)),
+            let expectedTitle = includeDocuments ? (basename as NSString).deletingPathExtension : String(basename.dropLast(3))
+            guard node.id.utf8.count <= 4_096, format(for: node.id, includeDocuments: includeDocuments) != nil, node.title == expectedTitle,
                   node.folder == folder, node.inDegree == incoming[node.id, default: 0],
                   node.outDegree == outgoing[node.id, default: 0],
                   node.degree == node.inDegree + node.outDegree else {
@@ -88,8 +143,8 @@ public actor GrapheineService {
         return graph
     }
 
-    private nonisolated static func validateScope(_ scope: PruningScanScope) throws {
-        guard scope.kind == "markdown-discovery", scope.excludedCount >= scope.excludedPaths.count,
+    private nonisolated static func validateScope(_ scope: PruningScanScope, includeDocuments: Bool = false) throws {
+        guard scope.kind == (includeDocuments ? "document-discovery" : "markdown-discovery"), scope.excludedCount >= scope.excludedPaths.count,
               scope.excludedPaths.count <= 100, scope.appliedFilters.count <= 100,
               scope.unsupportedFilters.count <= 100, scope.limitations.count <= 100,
               scope.truncated == (scope.excludedCount > scope.excludedPaths.count),

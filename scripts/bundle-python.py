@@ -8,6 +8,7 @@ import shutil
 import sys
 import tarfile
 import tempfile
+import zipfile
 
 VERSION = "3.13.16"
 RELEASE = "20261009"
@@ -16,11 +17,15 @@ URL = "https://github.com/astral-sh/python-build-standalone/releases/download/" 
 SHA256 = "11785155d0f70e634178219c20925d8f20be00a3da4684fc4f5019dd15602ef7"
 
 
-def bundle(archive, framework):
+def bundle(archive, framework, wheels):
     if hashlib.sha256(archive.read_bytes()).hexdigest() != SHA256:
         raise SystemExit("Python archive checksum mismatch; no runtime was bundled.")
     if framework.exists():
         raise SystemExit("Refusing to replace an existing Python framework.")
+    dependencies = json.loads(Path(__file__).with_name("python-dependencies.json").read_text())
+    for item in dependencies["wheels"]:
+        if hashlib.sha256((wheels / item["file"]).read_bytes()).hexdigest() != item["sha256"]:
+            raise SystemExit("Python dependency checksum mismatch: " + item["file"])
     framework.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=framework.parent) as temporary:
         # Only the exact pinned upstream archive reaches extraction.
@@ -29,6 +34,10 @@ def bundle(archive, framework):
         version = framework / "Versions" / "3.13"
         version.parent.mkdir(parents=True)
         shutil.move(str(Path(temporary) / "python"), version)
+
+    for item in dependencies["wheels"]:
+        with zipfile.ZipFile(wheels / item["file"]) as wheel:
+            wheel.extractall(version / "lib/python3.13/site-packages")
 
     # Use the conventional framework executable layout, preserving Python's
     # relative stdlib lookup and all upstream license notices.
@@ -55,9 +64,10 @@ def bundle(archive, framework):
         "architecture": "arm64", "release": RELEASE,
         "license": "../lib/python3.13/LICENSE.txt",
     }, indent=2) + "\n")
+    (resources / "dependencies.json").write_text(json.dumps(dependencies, indent=2) + "\n")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        raise SystemExit("Usage: bundle-python.py ARCHIVE Python.framework\nDownload: " + URL)
-    bundle(Path(sys.argv[1]), Path(sys.argv[2]))
+    if len(sys.argv) != 4:
+        raise SystemExit("Usage: bundle-python.py ARCHIVE Python.framework WHEEL_DIRECTORY\nDownload: " + URL)
+    bundle(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]))

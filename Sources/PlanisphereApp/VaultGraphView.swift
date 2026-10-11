@@ -15,6 +15,11 @@ final class VaultGraphModel {
     var noteError: String?
     var readingNote = false
     var query = ""
+    var includeDocuments = false
+    var document: DocumentRead?
+    var contentMatches: [DocumentMatch] = []
+    var searching = false
+    var searchError: String?
     var neighborhood = false
     var showIsolates = true
     var paused = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -27,12 +32,15 @@ final class VaultGraphModel {
     private let service = GrapheineService()
     private var requestID = UUID()
     private var noteTask: Task<Void, Never>?
+    private var searchTask: Task<Void, Never>?
+    private var selectionRequest = UUID()
 
     var selected: GraphNode? { snapshot?.nodes.first { $0.id == selectedID } }
     var matches: [GraphNode] {
         guard let snapshot else { return [] }
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return snapshot.nodes.filter { q.isEmpty || $0.id.localizedCaseInsensitiveContains(q) }
+        let content = Set(contentMatches.map(\.path))
+        return snapshot.nodes.filter { q.isEmpty || $0.id.localizedCaseInsensitiveContains(q) || content.contains($0.id) }
             .sorted { $0.degree == $1.degree ? $0.id < $1.id : $0.degree > $1.degree }
     }
     var neighbors: [GraphNode] {
@@ -55,18 +63,22 @@ final class VaultGraphModel {
     }
 
     func load(vault: VaultRecord) async {
+        searchTask?.cancel()
+        contentMatches = []
+        searchError = nil
         let request = UUID()
         requestID = request
         loading = true
         error = nil
         do {
-            let result = try await service.graph(vaultURL: vault.url)
+            let result = try await service.graph(vaultURL: vault.url, includeDocuments: includeDocuments)
             guard !Task.isCancelled, requestID == request else { return }
             snapshot = result
             revision = UUID()
             pinned.formIntersection(Set(result.nodes.map(\.id)))
             if let selectedID { select(result.nodes.contains(where: { $0.id == selectedID }) ? selectedID : nil, vault: vault) }
             loading = false
+            search(vault: vault)
         } catch {
             guard requestID == request else { return }
             loading = false
@@ -74,30 +86,66 @@ final class VaultGraphModel {
         }
     }
 
-    func select(_ id: String?, vault: VaultRecord) {
+    func select(_ id: String?, vault: VaultRecord, location: DocumentLocation? = nil) {
+        let request = UUID()
+        selectionRequest = request
         selectedID = id
         noteTask?.cancel()
         noteText = nil
+        document = nil
         noteError = nil
         readingNote = false
         guard let id else { neighborhood = false; return }
+        let searchFingerprint = location == nil ? nil : contentMatches.first(where: { $0.path == id })?.sha256
         readingNote = true
         noteTask = Task {
             do {
-                let text = try await service.readNote(vaultURL: vault.url, path: id)
-                guard !Task.isCancelled, selectedID == id else { return }
-                noteText = text.map { String($0.prefix(12_000)) }
-                if text == nil { noteError = "This note is too large or is not readable text. Open it in your editor." }
-                else if (text?.count ?? 0) > 12_000 { noteError = "Showing the first 12,000 characters." }
+                let read = try await service.readDocument(vaultURL: vault.url, path: id, location: location, includeDocuments: includeDocuments)
+                guard !Task.isCancelled, selectedID == id, selectionRequest == request else { return }
+                if let searchFingerprint, read.sha256 != searchFingerprint {
+                    noteError = "This source changed since the search. Results are refreshing; select the matching passage again."
+                    readingNote = false
+                    search(vault: vault)
+                    return
+                }
+                document = read
+                noteText = read.body
+                if read.preview_truncated { noteError = "Preview limited to 12,000 characters. Open the source to read the rest." }
+                if read.format == "pdf", read.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    noteError = "No extractable text on this page. Scanned pages require OCR, which is not included."
+                }
             } catch {
-                guard !Task.isCancelled, selectedID == id else { return }
+                guard !Task.isCancelled, selectedID == id, selectionRequest == request else { return }
                 noteError = error.localizedDescription
             }
             readingNote = false
         }
     }
 
-    func stop() { noteTask?.cancel() }
+    func search(vault: VaultRecord) {
+        searchTask?.cancel()
+        contentMatches = []
+        searchError = nil
+        let value = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { searching = false; return }
+        searching = true
+        let mode = includeDocuments
+        searchTask = Task {
+            do {
+                try await Task.sleep(for: .milliseconds(300))
+                let result = try await service.searchDocuments(vaultURL: vault.url, query: value, includeDocuments: mode)
+                guard !Task.isCancelled, query.trimmingCharacters(in: .whitespacesAndNewlines) == value, includeDocuments == mode else { return }
+                contentMatches = result.matches
+                searching = false
+            } catch {
+                guard !Task.isCancelled, query.trimmingCharacters(in: .whitespacesAndNewlines) == value, includeDocuments == mode else { return }
+                searchError = error.localizedDescription
+                searching = false
+            }
+        }
+    }
+
+    func stop() { noteTask?.cancel(); searchTask?.cancel() }
 
     func openNote(vault: VaultRecord) {
         guard let id = selectedID else { return }
@@ -132,8 +180,8 @@ struct VaultGraphView: View {
             } else if graph.loading {
                 VStack(spacing: 14) {
                     ProgressView().controlSize(.small)
-                    Text("Connecting your notes").font(.system(size: 18, weight: .semibold))
-                    Text("Reading the links in your local Markdown.")
+                    Text("Connecting your files").font(.system(size: 18, weight: .semibold))
+                    Text(graph.includeDocuments ? "Reading links in Markdown and TeX, and finding your documents." : "Reading the links in your local Markdown.")
                         .font(.system(size: 13)).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -142,6 +190,7 @@ struct VaultGraphView: View {
                 } description: {
                     Text(graph.error ?? "Explore the links between your Markdown notes.")
                 } actions: {
+                    Toggle("Include TeX, PDFs and code", isOn: $graph.includeDocuments).toggleStyle(.checkbox)
                     Button("Load graph") { refresh() }.buttonStyle(PSButtonStyle(primary: true))
                 }
             }
@@ -153,8 +202,12 @@ struct VaultGraphView: View {
                 .keyboardShortcut("f", modifiers: .command).hidden().accessibilityHidden(true)
         }
         .onChange(of: graph.query) { _, query in
+            graph.search(vault: vault)
             if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { inspectorPresented = true }
             else if graph.selectedID == nil { inspectorPresented = false }
+        }
+        .onChange(of: graph.includeDocuments) { _, _ in
+            graph.stop(); graph.snapshot = nil; graph.select(nil, vault: vault); refresh()
         }
         .task { if graph.snapshot == nil { await graph.load(vault: vault) } }
         .onDisappear { refreshTask?.cancel(); graph.stop() }
@@ -223,7 +276,7 @@ struct VaultGraphView: View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-                TextField("Find a note", text: $graph.query)
+                TextField("Search names and contents", text: $graph.query)
                     .font(.system(size: 13)).textFieldStyle(.plain).focused($searchFocused)
                     .accessibilityIdentifier("graph-search")
                     .onExitCommand {
@@ -242,9 +295,12 @@ struct VaultGraphView: View {
             }
             HStack(spacing: 5) {
                 if graph.loading { ProgressView().controlSize(.mini).scaleEffect(0.7).frame(width: 10, height: 10) }
-                Text(graph.loading ? "Refreshing…" : "\(graph.visibleCounts.notes.formatted()) notes · \(graph.visibleCounts.links.formatted()) links")
+                Text(graph.loading ? "Refreshing…" : "\(graph.visibleCounts.notes.formatted()) files · \(graph.visibleCounts.links.formatted()) links")
                 if graph.neighborhood { Text("· Neighborhood") }
             }.font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+            Toggle("Include TeX, PDFs and code", isOn: $graph.includeDocuments)
+                .toggleStyle(.checkbox).font(.system(size: 11))
+                .accessibilityIdentifier("graph-include-documents")
         }
         .padding(.horizontal, 13).padding(.vertical, 11)
         .background(PSStyle.surface.opacity(0.97), in: RoundedRectangle(cornerRadius: 12))
@@ -315,7 +371,7 @@ struct VaultGraphView: View {
     private func inspector(_ snapshot: GraphSnapshot) -> some View {
         VStack(spacing: 0) {
             HStack {
-                PSSectionLabel(title: graph.selected == nil ? "Explore" : "Note details")
+                PSSectionLabel(title: graph.selected == nil ? "Explore" : "File details")
                 Spacer()
                 PSIconButton(symbol: "xmark", help: "Hide graph details") { inspectorPresented = false }
                     .accessibilityIdentifier("graph-inspector-close")
@@ -331,7 +387,14 @@ struct VaultGraphView: View {
                                 Text(graph.matches.count.formatted()).font(.system(size: 11)).foregroundStyle(.secondary)
                             }.padding(.bottom, 3)
                             ForEach(graph.matches.prefix(60)) { node in noteButton(node) }
-                            if graph.matches.isEmpty { Text("No notes match this search.").font(.system(size: 12)).foregroundStyle(.secondary) }
+                            if graph.searching { ProgressView("Searching contents…").controlSize(.small) }
+                            if graph.includeDocuments { Text("PDF search covers embedded text. Scanned pages need OCR.").font(.system(size: 10)).foregroundStyle(.secondary) }
+                            if let error = graph.searchError { Text("Content search unavailable: \(error)").font(.system(size: 11)).foregroundStyle(.secondary) }
+                            if graph.contentMatches.count == 60 { Text("Showing up to 60 content matches. Refine your search for more.").font(.system(size: 11)).foregroundStyle(.secondary) }
+                            if graph.contentMatches.contains(where: { hit in !snapshot.nodes.contains(where: { $0.id == hit.path }) }) {
+                                Text("Some matching files are outside this graph's display limit.").font(.system(size: 11)).foregroundStyle(.secondary)
+                            }
+                            if graph.matches.isEmpty && !graph.searching { Text("No files match this search.").font(.system(size: 12)).foregroundStyle(.secondary) }
                             if graph.matches.count > 60 { Text("Refine your search for more results.").font(.system(size: 11)).foregroundStyle(.secondary) }
                         }
                         if graph.selected != nil { Divider() }
@@ -350,7 +413,7 @@ struct VaultGraphView: View {
                                 .font(.system(size: 11)).foregroundStyle(.secondary)
                         }
                         HStack(spacing: 7) {
-                            Button("Open note", systemImage: "arrow.up.forward.app") { graph.openNote(vault: vault) }
+                            Button("Open source", systemImage: "arrow.up.forward.app") { graph.openNote(vault: vault) }
                                 .buttonStyle(PSButtonStyle(primary: true)).accessibilityIdentifier("graph-open-note")
                             PSIconButton(symbol: "scope", help: "Center selected note") { graph.focusRequest += 1 }
                         }
@@ -358,8 +421,22 @@ struct VaultGraphView: View {
                         if let text = graph.noteText {
                             VStack(alignment: .leading, spacing: 9) {
                                 PSSectionLabel(title: "Preview")
+                                if let read = graph.document {
+                                    HStack {
+                                        Text(read.location?.label ?? "Original text").font(.system(size: 11)).monospacedDigit()
+                                        Spacer()
+                                        let current = read.location?.page ?? read.location?.line ?? 1
+                                        let step = read.format == "pdf" ? 1 : 80
+                                        let total = read.page_count ?? read.total_lines ?? 1
+                                        Button { graph.select(node.id, vault: vault, location: read.format == "pdf" ? DocumentLocation(page: max(1, current - step)) : DocumentLocation(line: max(1, current - step))) } label: { Image(systemName: "chevron.left") }
+                                            .disabled(current <= 1).accessibilityLabel("Previous source passage")
+                                        Button { graph.select(node.id, vault: vault, location: read.format == "pdf" ? DocumentLocation(page: current + step) : DocumentLocation(line: current + step)) } label: { Image(systemName: "chevron.right") }
+                                            .disabled(current + step > total).accessibilityLabel("Next source passage")
+                                    }.buttonStyle(.borderless)
+                                    if read.format == "pdf" { Text("Extracted text · \(read.page_count ?? 0) pages · no OCR").font(.system(size: 10)).foregroundStyle(.secondary) }
+                                }
                                 ScrollView {
-                                    Text(text).font(.system(size: 12)).lineSpacing(4).textSelection(.enabled)
+                                    Text(text).font(.system(size: 12, design: ["code", "tex"].contains(graph.document?.format ?? "") ? .monospaced : .default)).lineSpacing(4).textSelection(.enabled)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .padding(12)
                                 }
@@ -377,7 +454,7 @@ struct VaultGraphView: View {
                         }.font(.system(size: 11))
                         Divider()
                         VStack(alignment: .leading, spacing: 7) {
-                            PSSectionLabel(title: "Connected notes · \(graph.neighbors.count)").padding(.bottom, 3)
+                            PSSectionLabel(title: "Connected files · \(graph.neighbors.count)").padding(.bottom, 3)
                             ForEach(graph.neighbors.prefix(80)) { neighbor in noteButton(neighbor) }
                             if graph.neighbors.isEmpty { Text("No resolved connections in this snapshot.").font(.system(size: 12)).foregroundStyle(.secondary) }
                         }
@@ -412,8 +489,14 @@ struct VaultGraphView: View {
     }
 
     private func noteButton(_ node: GraphNode) -> some View {
-        GraphInspectorNoteRow(node: node, selected: graph.selectedID == node.id) {
-            graph.select(node.id, vault: vault); graph.focusRequest += 1; inspectorPresented = true
+        VStack(alignment: .leading, spacing: 3) {
+            let hit = graph.contentMatches.first { $0.path == node.id }
+            GraphInspectorNoteRow(node: node, selected: graph.selectedID == node.id) {
+                graph.select(node.id, vault: vault, location: hit?.location); graph.focusRequest += 1; inspectorPresented = true
+            }
+            if let hit {
+                Text("\(hit.location.label) · \(hit.snippet.split(whereSeparator: { $0.isWhitespace }).joined(separator: " "))").font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(3).padding(.horizontal, 8)
+            }
         }
     }
 
@@ -425,13 +508,13 @@ struct VaultGraphView: View {
     private func scopeDetails(_ snapshot: GraphSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Your graph snapshot").font(.system(size: 15, weight: .semibold))
-            Text("\(snapshot.nodes.count.formatted()) notes · Scanned \(snapshot.scannedAt)").foregroundStyle(.secondary)
+            Text("\(snapshot.nodes.count.formatted()) files · Scanned \(snapshot.scannedAt)").foregroundStyle(.secondary)
             Text("Refresh to include edits made in your editor. Colors and starting positions follow folders; size follows connections. Layout distance is for exploration, not a measure of meaning.")
             Divider()
             Text("\(snapshot.unresolvedLinkCount) unresolved · \(snapshot.ambiguousLinkCount) ambiguous · \(snapshot.unsupportedLinkCount) unsupported references")
-            Text("\(snapshot.scope.excludedCount.formatted()) excluded locations · \(snapshot.omittedNodeCount.formatted()) notes and \(snapshot.omittedEdgeCount.formatted()) links beyond display limits")
+            Text("\(snapshot.scope.excludedCount.formatted()) excluded locations · \(snapshot.omittedNodeCount.formatted()) files and \(snapshot.omittedEdgeCount.formatted()) links beyond display limits")
             ForEach(snapshot.limits + snapshot.scope.limitations + snapshot.scope.unsupportedFilters, id: \.self) { Text($0) }
-            Text("The graph reads local notes. It does not change links or upload your vault.").foregroundStyle(.secondary)
+            Text("The graph reads local files. It does not change links or upload your vault.").foregroundStyle(.secondary)
         }.font(.system(size: 12)).padding(20).frame(width: 350)
     }
 

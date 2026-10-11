@@ -734,11 +734,129 @@ def apply(authority, root, policy, packet_path, receipt_path):
     return {**result, "message": "All existing Grapheine gates passed; signed settlement committed."}
 
 
-def graph_snapshot(graph, root):
+def document_reader(root, *, documents=True):
+    import importlib.util
+    path = Path(__file__).resolve().with_name("planisphere_reader.py")
+    spec = importlib.util.spec_from_file_location("planisphere_document_reader", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.Reader(root.name, root, timeout=60, cache_root=os.environ.get("PLANISPHERE_READER_CACHE"),
+                         formats=tuple(module.FORMAT_EXTENSIONS) if documents else ("markdown",)), module
+
+
+def document_operation(root, action, path=None, query=None, page=None, line=None, documents=True):
+    reader, _ = document_reader(root, documents=documents)
+    with reader:
+        if action == "read-document":
+            result = reader.execute("read", path=path, page=page, line=line)
+            result["preview_truncated"] = len(result["body"]) > 12000
+            result["body"] = result["body"][:12000]
+            result["body_sha256"] = hashlib.sha256(result["body"].encode()).hexdigest()
+            result["body_bytes"] = len(result["body"].encode())
+            return result
+        if not query or len(query.encode()) > 4096:
+            raise BridgeError("Enter a search of at most 4096 bytes.")
+        # The app is a literal search box; do not interpret user text as FTS syntax.
+        terms = query.split()
+        expression = " AND ".join('"' + term.replace('"', '""') + '"' for term in terms)
+        return reader.execute("search", query=expression, limit=60)
+
+
+def tex_link_source(text):
+    """Mask literal TeX regions before static link extraction; never expand macros."""
+    token = re.compile(r"%|\\(?:[A-Za-z]+|[^\r\n])")
+    newline_token = re.compile(r"[\r\n]")
+    environment_token = re.compile(r"\s*\{([^{}]+)\}")
+    literal_environments = {"verbatim", "verbatim*", "Verbatim", "Verbatim*", "lstlisting", "minted", "comment"}
+    parts, cursor = [], 0
+    while match := token.search(text, cursor):
+        parts.append(text[cursor:match.start()])
+        command, stop, literal = match[0], match.end(), False
+        if command == "%":
+            newline = newline_token.search(text, stop)
+            stop = newline.start() if newline else len(text)
+            literal = True
+        elif command == r"\verb":
+            if stop < len(text) and text[stop] == "*":
+                stop += 1
+            if stop < len(text) and text[stop] not in "\r\n":
+                delimiter = text[stop]
+                newline = newline_token.search(text, stop + 1)
+                boundary = newline.start() if newline else len(text)
+                closing = text.find(delimiter, stop + 1, boundary)
+                stop = closing + 1 if closing >= 0 else boundary
+            literal = True
+        elif command == r"\begin":
+            environment = environment_token.match(text, stop)
+            if environment and environment[1] in literal_environments:
+                closing = "\\end{" + environment[1] + "}"
+                end = text.find(closing, environment.end())
+                stop = end + len(closing) if end >= 0 else len(text)
+                literal = True
+        elif len(command) == 2 and not command[1].isalpha():
+            # Consume control symbols as pairs, including escaped backslashes/%.
+            literal = True
+        parts.append(re.sub(r"[^\r\n]", " ", text[match.start():stop]) if literal else text[match.start():stop])
+        cursor = stop
+    parts.append(text[cursor:])
+    return "".join(parts)
+
+
+def document_graph(graph, root, builder):
+    from collections import defaultdict
+    reader, module = document_reader(root)
+    with reader:
+        reader._load_scope()
+        inventory, total, counts = reader._inventory()
+        formats = {path: module.document_format(path) for path in inventory}
+        texts = {path: reader._read_bytes(path, expected=stamp)[1] if formats[path] in {"markdown", "tex"} else ""
+                 for path, stamp in inventory.items()}
+        extra, owners, tex = defaultdict(list), defaultdict(list), {}
+        for path, text in texts.items():
+            if formats[path] != "tex" or not path.lower().endswith(".tex"):
+                continue
+            clean = tex_link_source(text)
+            tex[path] = clean
+            for label in graph._extract_tex_labels(clean):
+                if path not in owners[label["label"]]:
+                    owners[label["label"]].append(path)
+        for path, text in tex.items():
+            for match in graph.TEX_REF_RE.finditer(text):
+                candidates = owners.get(match.group(1).strip(), [])
+                if len(candidates) == 1:
+                    extra[path].append(("root", candidates[0]))
+            for match in re.finditer(r"\\(?:input|include)\s*\{([^{}]+)\}", text):
+                destination = match[1] if match[1].lower().endswith(".tex") else match[1] + ".tex"
+                extra[path].append(("markdown", destination))
+        result = builder(texts, str(root), formats=formats, extra_links=extra)
+        unresolved = sum(1 for path, text in tex.items() for match in graph.TEX_REF_RE.finditer(text)
+                         if not owners.get(match.group(1).strip()))
+        ambiguous = sum(1 for path, text in tex.items() for match in graph.TEX_REF_RE.finditer(text)
+                        if len(owners.get(match.group(1).strip(), [])) > 1)
+        result["unresolvedLinkCount"] += unresolved
+        result["ambiguousLinkCount"] += ambiguous
+        if reader._inventory()[:2] != (inventory, total):
+            raise BridgeError("The selected document inventory changed. Refresh the graph.")
+        reader._check_scope()
+        reader._check_root()
+        rules = sorted(set(reader.filters + list(reader.scope_stamp[2] if reader.scope_stamp else ())))
+        excluded = sum(counts[k] for k in ("hidden", "dependencies", "configured", "symlinks", "special"))
+        scope = {"kind": "document-discovery", "excludedPaths": [], "excludedCount": excluded,
+                 "truncated": excluded > 0, "appliedFilters": rules[:100], "unsupportedFilters": [],
+                 "limitations": ["Exclusions are counted during the bounded read inventory; individual omitted paths are not listed.",
+                                 "Only the graph and reader include documents. Pruning and Markdown checkpoints retain their existing scope."]}
+        if len(rules) > 100:
+            scope["limitations"].append("Only the first 100 filters are displayed; all configured filters were applied.")
+        return {**result, "vaultPath": str(root), "scannedAt": datetime.now(timezone.utc).isoformat(), "scope": scope}
+
+
+def graph_snapshot(graph, root, *, documents=False):
     import tempfile
     helper_path = Path(__file__).resolve().with_name("graph_adapter.py")
     namespace = {"__name__": "planisphere_graph_adapter"}
     exec(compile(read_regular(helper_path), str(helper_path), "exec"), namespace)
+    if documents:
+        return document_graph(graph, root, namespace["build_graph"])
     with tempfile.TemporaryDirectory(prefix=".planisphere-graph-") as temporary:
         stage = Path(temporary).resolve()
         before = discovery_inventory(root, graph, destination=stage)
@@ -755,7 +873,7 @@ def main(argv=None):
         def error(self, message):
             raise BridgeError(message)
     parser = JSONArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["scan", "graph", "prepare", "apply", "prepare-local", "verify-local"])
+    parser.add_argument("action", choices=["scan", "graph", "graph-documents", "read-document", "search-documents", "prepare", "apply", "prepare-local", "verify-local"])
     parser.add_argument("--engine-root", required=True)
     parser.add_argument("--vault", required=True)
     parser.add_argument("--policy")
@@ -766,6 +884,11 @@ def main(argv=None):
     parser.add_argument("--members")
     parser.add_argument("--keep")
     parser.add_argument("--fingerprint")
+    parser.add_argument("--path")
+    parser.add_argument("--query")
+    parser.add_argument("--page", type=int)
+    parser.add_argument("--line", type=int)
+    parser.add_argument("--markdown-only", action="store_true")
     try:
         args = parser.parse_args(argv)
         root = safe_path(args.vault, directory=True)
@@ -774,10 +897,14 @@ def main(argv=None):
             graph, authority = load_engine(args.engine_root)
             if args.action == "scan":
                 result = scan(graph, authority, root, args.policy)
-            elif args.action == "graph":
+            elif args.action in ("read-document", "search-documents"):
+                if args.policy:
+                    raise BridgeError("Document reads do not use a mutation policy.")
+                result = document_operation(root, args.action, args.path, args.query, args.page, args.line, not args.markdown_only)
+            elif args.action in ("graph", "graph-documents"):
                 if args.policy:
                     raise BridgeError("Graph discovery does not use an authority policy.")
-                result = graph_snapshot(graph, root)
+                result = graph_snapshot(graph, root, documents=args.action == "graph-documents")
             elif args.action in ("prepare-local", "verify-local"):
                 if args.policy:
                     raise BridgeError("A configured signed policy cannot be bypassed by a local review request.")
