@@ -171,9 +171,14 @@ struct VaultWorkspaceView: View {
                 Menu {
                     Button("Add Existing Vault…", systemImage: "folder.badge.plus") { model.chooseExistingVault() }
                     Button("Create New Vault…", systemImage: "plus.square") { model.chooseNewVault() }
-                } label: { Image(systemName: "plus").font(.system(size: 12, weight: .medium)) }
-                .menuStyle(.borderlessButton).frame(width: 20).disabled(model.isBusy)
+                } label: {
+                    Image(systemName: "plus").font(.system(size: 12, weight: .medium))
+                        .frame(width: 28, height: 28).contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden)
+                .frame(width: 28, height: 28).disabled(model.isBusy)
                 .help("Add or create a local vault").accessibilityLabel("Add a vault")
+                .accessibilityIdentifier("add-vault")
             }.padding(.horizontal, 20).padding(.top, 30).padding(.bottom, 12)
 
             ScrollView {
