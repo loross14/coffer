@@ -11,6 +11,11 @@ struct PlanisphereApp: App {
             VaultWorkspaceView(model: model)
                 .frame(minWidth: 1060, minHeight: 660)
                 .task { await model.start() }
+                .onOpenURL { url in
+                    guard url.scheme == "ooo.planisphere.mac", url.host == nil, url.query == nil, url.fragment == nil, model.canNavigateWorkspace else { return }
+                    if url.path == "/prompts" { model.activitySurface = .prompts }
+                    if url.path == "/hooks" { model.activitySurface = .hooks }
+                }
         }
         .defaultSize(width: 1320, height: 820)
         .commands {
@@ -44,6 +49,12 @@ struct PlanisphereApp: App {
                     Button("Open \(surface.rawValue)") { model.selectedSurface = surface }
                         .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
                         .disabled(!model.canNavigateWorkspace || model.selectedVault == nil || model.commandPalettePresented)
+                }
+                Divider()
+                ForEach(Array(ActivitySurface.allCases.enumerated()), id: \.element) { index, surface in
+                    Button("Open \(surface.rawValue)") { model.activitySurface = surface }
+                        .keyboardShortcut(KeyEquivalent(Character(String(index + 4))), modifiers: .command)
+                        .disabled(!model.canNavigateWorkspace || model.commandPalettePresented)
                 }
                 Divider()
                 Button(model.sidebarVisible ? "Hide Sidebar" : "Show Sidebar") { model.sidebarVisible.toggle() }

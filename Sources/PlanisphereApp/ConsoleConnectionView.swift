@@ -3,6 +3,7 @@ import PlanisphereConnection
 
 struct ConsoleConnectionView: View {
     @Bindable var connection: ConsoleConnectionModel
+    @State private var confirmSwitch = false
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
@@ -32,26 +33,43 @@ struct ConsoleConnectionView: View {
                     .accessibilityIdentifier("console-connection-message")
             }
             if connection.busy { ProgressView("Working…").controlSize(.small) }
-            HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 12) {
+              HStack(spacing: 12) {
                 if connection.credential == nil {
                     Button("Connect to Console") { Task { await connection.connect() } }.buttonStyle(PSButtonStyle(primary: true)).disabled(connection.busy)
                 } else {
+                    if connection.verified && !Set(connection.credential?.connection.permissions ?? []).isSuperset(of: ["prompts:read", "hooks:read"]) {
+                        Button("Enable Activity Access…") { confirmSwitch = true }.buttonStyle(PSButtonStyle(primary: true)).disabled(connection.busy)
+                    }
                     if connection.needsSignIn {
                         Button("Sign in Again") { Task { await connection.reconnect() } }
                             .buttonStyle(PSButtonStyle(primary: true)).disabled(connection.busy)
                     } else {
                         Button("Check Connection") { Task { await connection.refresh() } }.buttonStyle(PSButtonStyle()).disabled(connection.busy)
                     }
-                    Button("Disconnect") { Task { await connection.disconnect() } }.buttonStyle(PSButtonStyle()).disabled(connection.busy)
                 }
                 if connection.canCancelSignIn { Button("Cancel Sign-in") { connection.cancel() } }
                 Spacer()
+              }
+              HStack(spacing: 12) {
+                if connection.credential != nil {
+                    Button("Switch Workspace…") { confirmSwitch = true }.buttonStyle(PSButtonStyle()).disabled(connection.busy)
+                    Button("Disconnect") { Task { await connection.disconnect() } }.buttonStyle(PSButtonStyle()).disabled(connection.busy)
+                }
+                Spacer()
                 Link("Open Console", destination: ConsoleClient.production.appendingPathComponent("console"))
+              }
             }
             Text("You can keep using local vaults without a console connection.").font(.caption).foregroundStyle(.secondary)
         }
-        .padding(28).frame(width: 540).background(PSStyle.canvas)
+        .padding(28).frame(width: 660).background(PSStyle.canvas)
         .interactiveDismissDisabled(connection.busy)
         .task { await connection.load() }
+        .confirmationDialog("Switch workspace?", isPresented: $confirmSwitch) {
+            Button("Disconnect and Choose Workspace") { Task { await connection.switchWorkspace() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The current connection will be disconnected before you choose a workspace in the browser. Local vaults and history stay on this Mac.")
+        }
     }
 }

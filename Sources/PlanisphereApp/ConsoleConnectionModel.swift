@@ -111,6 +111,13 @@ final class ConsoleConnectionModel: NSObject, ASWebAuthenticationPresentationCon
         busy = false
     }
 
+    func switchWorkspace() async {
+        guard !busy else { return }
+        await disconnect()
+        guard credential == nil else { return }
+        await connect()
+    }
+
     func reconnect() async {
         guard !busy, needsSignIn else { return }
         await disconnect()

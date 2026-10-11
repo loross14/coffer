@@ -17,7 +17,11 @@ struct VaultWorkspaceView: View {
                     sidebar.frame(width: 216, height: bounds.size.height, alignment: .top)
                     Divider()
                 }
-                workspace.frame(width: max(0, bounds.size.width - (model.sidebarVisible ? 217 : 0)), height: bounds.size.height, alignment: .top)
+                Group {
+                    if let surface = model.activitySurface {
+                        ConsoleWorkspaceView(model: model, surface: surface)
+                    } else { workspace }
+                }.frame(width: max(0, bounds.size.width - (model.sidebarVisible ? 217 : 0)), height: bounds.size.height, alignment: .top)
             }
             .frame(width: bounds.size.width, height: bounds.size.height)
         }
@@ -54,6 +58,9 @@ struct VaultWorkspaceView: View {
             Text("Your folder and its local history will be kept. Add the same folder again to return to its history.")
         }
         .onChange(of: confirmRemoval) { _, value in model.workspaceConfirmationPresented = value }
+        .onChange(of: model.console.credential?.token) { _, _ in model.activity.bind(model.console.credential, verified: model.console.verified) }
+        .onChange(of: model.console.verified) { _, _ in model.activity.bind(model.console.credential, verified: model.console.verified) }
+        .onChange(of: model.console.credential?.connection) { _, _ in model.activity.bind(model.console.credential, verified: model.console.verified) }
         .task {
             if ConsoleConnectionModel.isAvailable { await model.console.load() }
         }
@@ -150,23 +157,42 @@ struct VaultWorkspaceView: View {
                     Button { model.selectedSurface = surface } label: {
                         HStack(spacing: 11) {
                             Image(systemName: surface.symbol).font(.system(size: 14)).frame(width: 20)
-                            Text(surface.rawValue).font(.system(size: 13, weight: model.selectedSurface == surface ? .semibold : .regular))
+                            Text(surface.rawValue).font(.system(size: 13, weight: model.activitySurface == nil && model.selectedSurface == surface ? .semibold : .regular))
                             Spacer()
-                            if model.selectedSurface == surface {
+                            if model.activitySurface == nil && model.selectedSurface == surface {
                                 Capsule().fill(PSStyle.accent).frame(width: 3, height: 16)
                             }
                         }
-                        .foregroundStyle(model.selectedSurface == surface ? Color.primary : Color.secondary)
+                        .foregroundStyle(model.activitySurface == nil && model.selectedSurface == surface ? Color.primary : Color.secondary)
                         .padding(.horizontal, 12).frame(height: 38)
-                        .background(model.selectedSurface == surface ? PSStyle.accent.opacity(0.11) : Color.clear,
+                        .background(model.activitySurface == nil && model.selectedSurface == surface ? PSStyle.accent.opacity(0.11) : Color.clear,
                                     in: RoundedRectangle(cornerRadius: 8))
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain).disabled(model.isBusy || model.selectedVault == nil)
                     .accessibilityIdentifier("surface-\(surface.rawValue.lowercased())")
-                    .accessibilityAddTraits(model.selectedSurface == surface ? .isSelected : [])
+                    .accessibilityAddTraits(model.activitySurface == nil && model.selectedSurface == surface ? .isSelected : [])
                 }
             }.padding(.horizontal, 10)
+
+            VStack(spacing: 4) {
+                ForEach(ActivitySurface.allCases, id: \.self) { surface in
+                    Button { model.activitySurface = surface } label: {
+                        HStack(spacing: 11) {
+                            Image(systemName: surface.symbol).frame(width: 20)
+                            Text(surface.rawValue).font(.system(size: 13, weight: model.activitySurface == surface ? .semibold : .regular))
+                            Spacer()
+                            if model.activitySurface == surface { Capsule().fill(PSStyle.accent).frame(width: 3, height: 16) }
+                        }
+                        .foregroundStyle(model.activitySurface == surface ? Color.primary : Color.secondary)
+                        .padding(.horizontal, 12).frame(height: 38)
+                        .background(model.activitySurface == surface ? PSStyle.accent.opacity(0.11) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                        .contentShape(Rectangle())
+                    }.buttonStyle(.plain).disabled(!model.canNavigateWorkspace)
+                    .accessibilityIdentifier("surface-\(surface.rawValue.lowercased())")
+                    .accessibilityAddTraits(model.activitySurface == surface ? .isSelected : [])
+                }
+            }.padding(.horizontal, 10).padding(.top, 6)
 
             HStack {
                 PSSectionLabel(title: "Your vaults")

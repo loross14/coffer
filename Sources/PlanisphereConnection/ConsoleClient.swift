@@ -96,14 +96,16 @@ public struct ConsoleClient: Sendable {
         self.send = send
     }
 
-    private func request(_ path: String, method: String = "GET", token: String? = nil, body: [String: String]? = nil) async throws -> Data {
+    private func request(_ path: String, method: String = "GET", token: String? = nil, body: [String: String]? = nil, permissions: [String]? = nil) async throws -> Data {
         var request = URLRequest(url: origin.appendingPathComponent("mac/connections" + path))
         request.httpMethod = method
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token { request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
         if let body {
-            request.httpBody = try JSONEncoder().encode(body)
+            var object: [String: Any] = body
+            if let permissions { object["permissions"] = permissions }
+            request.httpBody = try JSONSerialization.data(withJSONObject: object)
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         let result: (Data, HTTPURLResponse)
@@ -119,7 +121,7 @@ public struct ConsoleClient: Sendable {
 
     public func begin(_ attempt: ConnectionAttempt) async throws -> URL {
         struct Started: Decodable { let authorization_path: String }
-        let data = try await request("/begin", method: "POST", body: ["challenge": attempt.challenge, "state": attempt.state, "label": "Planisphere on Mac"])
+        let data = try await request("/begin", method: "POST", body: ["challenge": attempt.challenge, "state": attempt.state, "label": "Planisphere on Mac"], permissions: ["prompts:read", "hooks:read"])
         let result = try JSONDecoder().decode(Started.self, from: data)
         guard result.authorization_path.range(of: "^/console#mac-connect/[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil,
               let url = URL(string: result.authorization_path, relativeTo: origin)?.absoluteURL else { throw ConnectionError.invalidResponse }

@@ -32,6 +32,11 @@ struct WorkspaceCommandsView: View {
                 symbol: "folder", shortcut: "", action: { model.openSelectedVault() }))
 
         }
+        for (index, surface) in ActivitySurface.allCases.enumerated() {
+            result.append(Command(id: surface.rawValue, title: "Open \(surface.rawValue)",
+                detail: "Local and workspace activity", symbol: surface.symbol, shortcut: "⌘\(index + 4)",
+                action: { model.activitySurface = surface }))
+        }
         for vault in model.vaults {
             result.append(Command(id: vault.id.uuidString, title: vault.name, detail: vault.path,
                 symbol: "folder", shortcut: "", action: { model.selectVault(vault.id) }))

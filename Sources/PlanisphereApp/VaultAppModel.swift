@@ -21,10 +21,12 @@ private struct PruningAttempt: Codable {
 @Observable
 final class VaultAppModel {
     let console = ConsoleConnectionModel()
+    let activity = WorkspaceActivityModel()
+    var activitySurface: ActivitySurface?
     var sidebarVisible = true
     var commandPalettePresented = false
     var workspaceConfirmationPresented = false
-    var selectedSurface: VaultSurface = .history
+    var selectedSurface: VaultSurface = .history { didSet { activitySurface = nil } }
     var vaults: [VaultRecord] = []
     var selectedVaultID: UUID?
     var checkpoints: [Checkpoint] = []
@@ -129,6 +131,7 @@ final class VaultAppModel {
     }
 
     func selectVault(_ id: UUID?) {
+        activitySurface = nil
         guard !isBusy, id != selectedVaultID else { return }
         Task {
             await perform("Reading local history") { store in

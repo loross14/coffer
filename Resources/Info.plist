@@ -7,6 +7,10 @@
 <key>CFBundleName</key><string>Planisphere</string>
 <key>CFBundleDisplayName</key><string>Planisphere</string>
 <key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleURLTypes</key><array><dict>
+<key>CFBundleURLName</key><string>Planisphere workspace</string>
+<key>CFBundleURLSchemes</key><array><string>ooo.planisphere.mac</string></array>
+</dict></array>
 <key>CFBundleShortVersionString</key><string>0.8.1</string>
 <key>CFBundleVersion</key><string>15</string>
 <key>SUFeedURL</key><string>https://www.planisphere.ooo/mac/appcast.xml</string>
