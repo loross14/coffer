@@ -1,8 +1,8 @@
 {
   "repository": "https://github.com/loross14/planisphere-api",
-  "commit": "04d55f44a3128012a68c14186530a255afe17eeb",
+  "commit": "dd6df52b91c8bf562400a38f2da122d6a57176ba",
   "files": {
-    "install_response_controls.py": "33b140f4492d13a4a70077f961c3629f96cb9a464c66e22a3faf124462d75cc3",
+    "install_response_controls.py": "b32166b8e498d83d640a91e94eea3f0bb1c1c70500c9e27e0f4d68d8ed8f5c80",
     "planisphere_context.py": "89e973f58501d271f7de4d46ab904074bbabaf1f6d0c7d1f9a175536b831274b",
     "planisphere_delivery.py": "3849b7562d5f675172f682cf7e60476ef4594ab8c1b173f1bf492ede6a729323",
     "planisphere_episodes.py": "81bb57c6a6270ba5ab7bf5546b35c886a76349faef65ff6ccb5222ffd323863d",
@@ -14,7 +14,8 @@
     "planisphere_instruction_gate.py": "73a7f4b50834796665e4bb26f83ce9b9d0c53169620894a8224c7506a40fd151",
     "planisphere_instructions.py": "31aa6d00e80ce69bb1f0aa54f2da31dbd64048c6dc9007c0208f1ff44de1d446",
     "planisphere_legacy_tasks.py": "c3f67b7fb8890fa068f4df10fb8421bbc800177da4a05dc629efbf0b33f59e15",
-    "planisphere_local_support.py": "ec8c075e2bb144cd3e3260bd6ac31c4b1bc903f0e3598c6f6bef68330050bd1c",
+    "planisphere_llm_onboarding.py": "f220aa0b8837624771d8d14bf956973466c5612cba9876548460d160f550ea06",
+    "planisphere_local_support.py": "b65d8c3620089851c9351f5ed25b26f0d9caab8771eecc7927a4b73f25c479fa",
     "planisphere_manual_evidence.py": "17d9915a4ed8d9eface6989595af38fdf3fcf6a300b26b5cebacfaf9d6b5752f",
     "planisphere_memory.py": "d61679a24c6f54da3ff8b89e0aa9659b7f337d5f29c181f31a5f07a244bb8f8e",
     "planisphere_memory_setup.py": "0f885d3aad827a40f3438152b1debb40f48784e0579598d8f756683d7b2de31f",
@@ -29,7 +30,7 @@
     "planisphere_routes.py": "86a934c23d279829fc5304777c0bf45ce9ae966e881e6c1adf33fa6c26489ee7",
     "planisphere_shared_feedback.py": "6e49ef08e1214768a2f4953c968008cc2df00d3c0044c3c0327525c9a94a9ac3",
     "planisphere_source_views.py": "d9b9d0646236fd72db246cb74cdf82a7ba7cd4a393f71a01c371e4a246268d43",
-    "planisphere_support_jobs.py": "75b23c187491e01b47ed9fa10cfd0b2a0568aa0c83657c9469ac83e060bf0d8e",
+    "planisphere_support_jobs.py": "17ff64c729499aa5606199ececfadbe3ca92b4a4619e5130bddbcdb8236cc3ae",
     "planisphere_support_settings.py": "8f8d04c02cfb90c568cefd78568ef44dc7ad4a9c497eadcfee8cff26bd716115",
     "planisphere_tasks.py": "3f59a14ae4af18f3dc9b16e36871da0f56047c98a52891c39d0f20795eea2d52",
     "planisphere_work_views.py": "86402e403790d8cf230034788e2fa0676123afe97c3055a6715b0cc696a9915a"
