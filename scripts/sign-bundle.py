@@ -9,7 +9,10 @@ MACHO = {b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xcf\x
 
 
 def sign(app, identity):
-    args = ["/usr/bin/codesign", "--force", "--sign", identity, "--options", "runtime",
+    # Ad-hoc identities have no Team ID, so hardened runtime library validation
+    # rejects their bundled extension modules. Distribution identities retain
+    # hardened runtime; local ad-hoc packages clear that option explicitly.
+    args = ["/usr/bin/codesign", "--force", "--sign", identity, "--options", "0" if identity == "-" else "runtime",
             "--preserve-metadata=identifier,entitlements", "--generate-entitlement-der",
             "--timestamp=none" if identity == "-" else "--timestamp"]
     files = sorted(app.rglob("*"), key=lambda path: len(path.parts), reverse=True)
