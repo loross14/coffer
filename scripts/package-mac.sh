@@ -25,6 +25,8 @@ trap 'rm -rf "$STAGING_DIR"' EXIT
 STAGING_APP="$STAGING_DIR/Planisphere.app"
 mkdir -p "$STAGING_APP/Contents/MacOS" "$STAGING_APP/Contents/Resources"
 cp "$BINARY_DIR/Planisphere" "$STAGING_APP/Contents/MacOS/Planisphere"
+mkdir -p "$STAGING_APP/Contents/Resources/Adapters"
+cp Integrations/Adapters/sandbox.py "$STAGING_APP/Contents/Resources/Adapters/sandbox.py"
 cp Resources/Info.plist "$STAGING_APP/Contents/Info.plist"
 ditto Resources/ThirdPartyNotices "$STAGING_APP/Contents/Resources/ThirdPartyNotices"
 mkdir -p "$STAGING_APP/Contents/Resources/Grapheine"
