@@ -58,6 +58,30 @@ preserved with a visible pending-deletion state. Original chats, authoritative
 tasks and separate exports remain outside this deletion scope. Newly worded
 semantic duplicates are not automatically detected.
 
+## Local support preview
+
+The Memory screen includes a separate Local support setup sheet. It lists loaded
+device-local LM Studio models and offers observation, prepared-evidence use and
+pause. Fresh memory setup is sufficient; no account or existing vault is required.
+Connecting support upgrades recognized existing agent controllers, preserves
+disabled events and requires normal Codex hook review. Opening Memory reads saved
+support status without waking the model; opening setup checks the local inventory.
+
+Native support snapshots contain bounded current records and declared dependency
+groups for explicit personal/project scopes. Missing or changed members remain
+gaps. Preferences, decisions, corrections and qualifications cannot be filtered
+out by the local model. When every item is required, deterministic code skips
+generation. Otherwise a background worker may prepare a smaller source selection.
+The foreground does not wait for generation, and a prepared selection does not
+acknowledge host delivery or establish answer quality.
+
+This remains a preview: only synthetic local inference and host journeys have
+been measured. The whole-workflow frontier-token, metered-cost and independent
+quality gates remain unmeasured. LM Studio is an external runtime dependency;
+no model weights are included in this app package. Pause stops new preparation
+and prevents stale publication; an in-flight provider request may finish within
+its configured limit.
+
 ## Acceptance and release boundaries
 
 Run the full Swift suite with the release-pinned Grapheine engine, plus

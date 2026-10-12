@@ -65,6 +65,7 @@ public final class MemoryStore {
                 return try status()
             case "inspect": return try scopedRecord(request)
             case "resume": return try resume(request)
+            case "support_snapshot": return try supportSnapshot(request)
             case "session":
                 let session = try field(request, "session_id"), epoch = token()
                 try db.transaction {
@@ -236,6 +237,39 @@ public final class MemoryStore {
          "pending_projections": try db.rows("SELECT path FROM projections WHERE phase!='ready'").count,
          "pending_deletions": try db.rows("SELECT record_id FROM tombstones WHERE phase!='complete'").count,
          "coverage": "local owned memory; original chats, external copies and task stores remain separate"]
+    }
+
+    private func supportSnapshot(_ r: [String: Any]) throws -> [String: Any] {
+        guard let scopes = r["scopes"] as? [String] else { throw MemoryError.rejected("Explicit scopes required") }
+        try require(!scopes.isEmpty && scopes.count <= 2 && scopes.allSatisfy { !$0.isEmpty }, "Invalid memory support scopes")
+        let budget = try integer(r.merging(["budget_bytes": r["budget_bytes"] ?? 16_384]) { _, v in v }, "budget_bytes", minimum: 768, maximum: 65_536)
+        var records = [[String: Any]]()
+        for scope in Set(scopes).sorted() {
+            for row in try db.rows("SELECT id FROM records WHERE scope=? ORDER BY id LIMIT 33", [scope]) {
+                records.append(try readRecord(row["id"]!))
+            }
+        }
+        try require(records.count <= 32, "Memory support snapshot exceeds record budget")
+        let versions = Dictionary(uniqueKeysWithValues: records.map { ($0["record_id"] as! String, $0["revision"] as! Int) })
+        var groups = [[String: Any]](), gaps = [[String: String]]()
+        for row in try db.rows("SELECT * FROM bundles") {
+            guard let members = try JSONSerialization.jsonObject(with: Data(row["members"]!.utf8)) as? [[String: Any]] else {
+                throw MemoryError.rejected("Invalid declared memory bundle")
+            }
+            guard members.contains(where: { versions[$0["record_id"] as? String ?? ""] != nil }) else { continue }
+            groups.append(["bundle_id": row["id"]!, "question": row["question"]!,
+                           "declaration_event": row["declaration_event"]!, "all_of": members])
+            for member in members {
+                let id = member["record_id"] as? String ?? ""
+                if versions[id] != member["revision"] as? Int {
+                    gaps.append(["bundle_id": row["id"]!, "record_id": id, "reason": "missing_or_changed_dependency"])
+                }
+            }
+        }
+        let result: [String: Any] = ["profile": profile, "scopes": scopes, "records": records,
+                                     "dependency_groups": groups, "gaps": gaps, "semantic_completeness": "unverified"]
+        try require(json(result).count + 1 <= budget, "Memory support snapshot exceeds byte budget")
+        return result
     }
 
     private func resume(_ r: [String: Any]) throws -> [String: Any] {

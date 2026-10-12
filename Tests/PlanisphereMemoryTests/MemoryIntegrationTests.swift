@@ -3,6 +3,32 @@ import XCTest
 @testable import PlanisphereMemory
 
 final class MemoryIntegrationTests: XCTestCase, @unchecked Sendable {
+    func testSupportSnapshotPreservesScopeAndExposesStaleOrMissingDependencies() throws {
+        let root = URL(fileURLWithPath: "/private/tmp/memory-support-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try MemoryStore(directory: root, profile: "p")
+        func request(_ action: String, _ fields: [String: Any]) throws -> [String: Any] {
+            try store.handle(["action": action, "profile": "p", "operation_id": UUID().uuidString].merging(fields) { _, v in v })
+        }
+        func commit(_ id: String, _ scope: String, _ revision: Int = 0) throws {
+            _ = try request("commit", ["record_id": id, "scope": scope, "expected_revision": revision,
+                "event_id": UUID().uuidString, "source_excerpt": "original", "body": "source with qualifications",
+                "kind": "claim", "attribution": "agent_interpretation"])
+        }
+        try commit("a", "personal"); try commit("b", "project:current"); try commit("c", "project:other")
+        _ = try request("bundle", ["bundle_id": "ab", "question": "paired premises", "declaration_event": "declaration",
+            "all_of": [["record_id": "a", "revision": 1], ["record_id": "b", "revision": 1]]])
+        let valid = try request("support_snapshot", ["scopes": ["personal", "project:current"]])
+        XCTAssertEqual(Set((valid["records"] as! [[String: Any]]).map { $0["record_id"] as! String }), ["a", "b"])
+        XCTAssertTrue((valid["gaps"] as! [[String: String]]).isEmpty)
+        let missing = try request("support_snapshot", ["scopes": ["personal"]])
+        XCTAssertEqual((missing["gaps"] as! [[String: String]])[0]["record_id"], "b")
+        try commit("b", "project:current", 1)
+        let stale = try request("support_snapshot", ["scopes": ["personal", "project:current"]])
+        XCTAssertFalse((stale["gaps"] as! [[String: String]]).isEmpty)
+        XCTAssertThrowsError(try request("support_snapshot", ["scopes": ["personal", "project:current"], "budget_bytes": 768]))
+    }
+
     func testScopesCannotMoveRecordsAndPausePreservesReadAndForget() throws {
         let root = URL(fileURLWithPath: "/private/tmp/memory-integration-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

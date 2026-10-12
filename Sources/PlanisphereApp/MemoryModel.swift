@@ -29,6 +29,7 @@ final class MemoryModel {
     private let service: LocalMemory
     private let installer = MemoryHostInstaller()
     let root: URL
+    let support: LocalSupportModel
     private var codexHome: URL {
         ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
@@ -38,6 +39,7 @@ final class MemoryModel {
         let defaultRoot = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Planisphere/Memory", isDirectory: true)
         self.root = root ?? defaultRoot
+        support = LocalSupportModel(root: self.root)
         let executable = helper ?? Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("planisphere-memory")
         service = LocalMemory(root: self.root, helper: executable)
     }

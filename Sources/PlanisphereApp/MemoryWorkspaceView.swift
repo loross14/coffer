@@ -61,6 +61,7 @@ struct MemoryWorkspaceView: View {
                             Button("Connect Codex") { Task { await model.connectCodex() } }.buttonStyle(PSButtonStyle()).disabled(model.busy)
                         }
                     }.padding(20).background(PSStyle.surface, in: RoundedRectangle(cornerRadius: 14))
+                    LocalSupportCard(model: model.support)
                     if !model.enabled { Label("Saving is paused. Existing memories remain available.", systemImage: "pause.circle").foregroundStyle(.secondary) }
                     if let message = model.message { Text(message).font(.callout).textSelection(.enabled) }
                     if model.pendingRepairs > 0 {
