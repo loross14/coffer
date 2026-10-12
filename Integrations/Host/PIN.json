@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/loross14/planisphere-api",
-  "commit": "08a7dbae41bbce8548d67aba718a473d308bede4",
+  "commit": "0d929c1ce315a61ab715b7076a8030e13dd7ef25",
   "files": {
     "install_response_controls.py": "ccc168c8009c51db6e4239c2fff11dc42a0ab96d7e067e5f207aa2e54aa322a2",
     "planisphere_context.py": "89e973f58501d271f7de4d46ab904074bbabaf1f6d0c7d1f9a175536b831274b",
@@ -19,7 +19,7 @@
     "planisphere_local_support.py": "b720463ac864dbab66f96c9a11cf637690de747e8faf67c866ecede96340ecb1",
     "planisphere_manual_evidence.py": "17d9915a4ed8d9eface6989595af38fdf3fcf6a300b26b5cebacfaf9d6b5752f",
     "planisphere_memory.py": "d61679a24c6f54da3ff8b89e0aa9659b7f337d5f29c181f31a5f07a244bb8f8e",
-    "planisphere_memory_setup.py": "0f885d3aad827a40f3438152b1debb40f48784e0579598d8f756683d7b2de31f",
+    "planisphere_memory_setup.py": "dbe42582cb7477172b36b062488fcb21648baec0798309e68e64b9e1a2f78d26",
     "planisphere_native_receipt.py": "49ea354766fb7203e4294ac75023b41f1f5c48ab8d1d2e15cba730caea9aa17a",
     "planisphere_payload.py": "cf90b8f68667bb0af49193669f392d8f962f6fce318ec419a22a517033074dba",
     "planisphere_projects.py": "55f5dc2019346c695aaac9c9e86e2bade56e6e8d5ad852151644ce308e5f326f",
