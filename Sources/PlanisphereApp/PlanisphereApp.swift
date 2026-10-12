@@ -3,6 +3,7 @@ import AppKit
 
 @main
 struct PlanisphereApp: App {
+    @NSApplicationDelegateAdaptor(TerminalApplicationDelegate.self) private var applicationDelegate
     @State private var model = VaultAppModel()
     @StateObject private var updater = AppUpdater()
 

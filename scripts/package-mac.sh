@@ -41,7 +41,9 @@ cp Integrations/Grapheine/planisphere_reader.py "$STAGING_APP/Contents/Resources
 cp Integrations/Grapheine/reader-provenance.json "$STAGING_APP/Contents/Resources/Grapheine/reader-provenance.json"
 /usr/bin/python3 scripts/bundle-grapheine.py "${PLANISPHERE_GRAPHEINE_SOURCE:-$REPO_ROOT/../Grapheine}" "$STAGING_APP/Contents/Resources/Grapheine/engine"
 /usr/bin/python3 scripts/bundle-python.py "$PYTHON_ARCHIVE" "$STAGING_APP/Contents/Frameworks/Python.framework" "$PYTHON_WHEELS"
-SPARKLE_FRAMEWORK="$BUILD_DIR/artifacts/mac/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+SWIFTPM_IDENTITY="$(basename "$REPO_ROOT" | tr '[:upper:]' '[:lower:]')"
+SPARKLE_FRAMEWORK="$BUILD_DIR/artifacts/$SWIFTPM_IDENTITY/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+ditto "$BINARY_DIR/SwiftTerm_SwiftTerm.bundle" "$STAGING_APP/Contents/Resources/SwiftTerm_SwiftTerm.bundle"
 ditto "$SPARKLE_FRAMEWORK" "$STAGING_APP/Contents/Frameworks/Sparkle.framework"
 if [ -n "${PLANISPHERE_UPDATE_PUBLIC_KEY:-}" ]; then
     /usr/bin/python3 - "$STAGING_APP/Contents/Info.plist" "$PLANISPHERE_UPDATE_PUBLIC_KEY" <<'PY'

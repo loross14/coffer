@@ -16,15 +16,21 @@ def sign(app, identity):
             "--preserve-metadata=identifier,entitlements", "--generate-entitlement-der",
             "--timestamp=none" if identity == "-" else "--timestamp"]
     files = sorted(app.rglob("*"), key=lambda path: len(path.parts), reverse=True)
+    code_files = []
     for path in files:
         if path.is_symlink() or not path.is_file():
             continue
         with path.open("rb") as source:
             is_code = source.read(4) in MACHO
         if is_code:
+            code_files.append(path)
             subprocess.run([*args, str(path)], check=True)
     for path in files:
         if path.is_dir() and not path.is_symlink() and path.suffix in {".framework", ".app", ".xpc", ".bundle"}:
+            # SwiftPM resource-only bundles have no executable/Info.plist.
+            # Their bytes are sealed by the containing app resource signature.
+            if path.suffix == ".bundle" and not any(path in item.parents for item in code_files):
+                continue
             subprocess.run([*args, str(path)], check=True)
     subprocess.run([*args, str(app)], check=True)
     subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)], check=True)

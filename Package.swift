@@ -10,6 +10,7 @@ let package = Package(
         .executable(name: "Planisphere", targets: ["PlanisphereApp"]),
         .executable(name: "planisphere-memory", targets: ["MemoryCLI"])
     ],
+    dependencies: [.package(url: "https://github.com/migueldeicaza/SwiftTerm.git", exact: "1.20.0")],
     targets: [
         .binaryTarget(name: "Sparkle",
                       url: "https://github.com/sparkle-project/Sparkle/releases/download/2.10.0/Sparkle-for-Swift-Package-Manager.zip",
@@ -23,7 +24,7 @@ let package = Package(
         .target(name: "PlanisphereGraph"),
         .target(name: "PlanisphereConnection"),
         .target(name: "PlanisphereManaged", dependencies: ["PlanisphereCore"]),
-        .executableTarget(name: "PlanisphereApp", dependencies: ["PlanisphereCore", "PlanisphereGrapheine", "PlanisphereGraph", "PlanisphereConnection", "PlanisphereMemory", "Sparkle"],
+        .executableTarget(name: "PlanisphereApp", dependencies: ["PlanisphereCore", "PlanisphereGrapheine", "PlanisphereGraph", "PlanisphereConnection", "PlanisphereMemory", "Sparkle", .product(name: "SwiftTerm", package: "SwiftTerm")],
                           linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
         .testTarget(name: "PlanisphereConnectionTests", dependencies: ["PlanisphereConnection"]),
         .testTarget(name: "PlanisphereAppTests", dependencies: ["PlanisphereApp", "PlanisphereConnection"]),

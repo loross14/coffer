@@ -20,6 +20,8 @@ struct VaultWorkspaceView: View {
                 Group {
                     if model.activitySurface == .memory {
                         MemoryWorkspaceView(model: model.memory)
+                    } else if model.activitySurface == .terminal {
+                        TerminalWorkspaceView(store: TerminalWorkspaceModel.shared, initialDirectory: model.selectedVault.map { URL(fileURLWithPath: $0.path) })
                     } else if let surface = model.activitySurface {
                         ConsoleWorkspaceView(model: model, surface: surface)
                     } else { workspace }
