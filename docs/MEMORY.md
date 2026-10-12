@@ -78,9 +78,10 @@ acknowledge host delivery or establish answer quality.
 This remains a preview: only synthetic local inference and host journeys have
 been measured. The whole-workflow frontier-token, metered-cost and independent
 quality gates remain unmeasured. LM Studio is an external runtime dependency;
-no model weights are included in this app package. Pause stops new preparation
-and prevents stale publication; an in-flight provider request may finish within
-its configured limit.
+no model weights are included in this app package. Pause stops new preparation,
+prevents stale publication and disconnects any active support request. Transport
+disconnection requests cancellation; it does not independently certify that a
+provider stopped. Interrupted requests without final usage retain unknown usage.
 
 ## Acceptance and release boundaries
 

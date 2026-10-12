@@ -79,7 +79,7 @@ final class LocalSupportModel {
         guard !busy else { return }; busy = true; defer { busy = false }
         do {
             status = try JSONDecoder().decode(SupportStatus.self, from: await service.request(root: root, home: home, mode: mode, model: selectedModel))
-            message = mode == "off" ? "Support is paused. No new preparation will start; a request already running may finish."
+            message = mode == "off" ? "Support is paused. Active preparation is being stopped; its results will not be used."
                 : "Setup saved. Review the updated hooks in Codex, then start a new chat. Automatic execution has not yet been verified."
         } catch { message = String(describing: error) }
     }
