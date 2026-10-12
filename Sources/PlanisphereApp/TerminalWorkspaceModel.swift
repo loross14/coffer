@@ -131,12 +131,14 @@ final class TerminalApplicationDelegate: NSObject, NSApplicationDelegate {
             alert.addButton(withTitle: "Close Terminals and Quit")
             guard alert.runModal() == .alertSecondButtonReturn else { return .terminateCancel }
         }
+        let adapters = AdapterSandboxModel.shared
+        if adapters.busy { adapters.cancel() }
         let running = store.sessions.filter { !$0.ended }
         store.closeAll()
-        guard !running.isEmpty else { return .terminateNow }
+        guard !running.isEmpty || adapters.busy else { return .terminateNow }
         Task { @MainActor in
             for _ in 0..<45 {
-                if running.allSatisfy({ $0.ended }) { break }
+                if running.allSatisfy({ $0.ended }) && !adapters.busy { break }
                 try? await Task.sleep(for: .milliseconds(100))
             }
             sender.reply(toApplicationShouldTerminate: true)

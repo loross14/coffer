@@ -22,6 +22,8 @@ struct VaultWorkspaceView: View {
                         MemoryWorkspaceView(model: model.memory)
                     } else if model.activitySurface == .terminal {
                         TerminalWorkspaceView(store: TerminalWorkspaceModel.shared, initialDirectory: model.selectedVault.map { URL(fileURLWithPath: $0.path) })
+                    } else if model.activitySurface == .adapters {
+                        AdapterSandboxView(model: AdapterSandboxModel.shared)
                     } else if let surface = model.activitySurface {
                         ConsoleWorkspaceView(model: model, surface: surface)
                     } else { workspace }

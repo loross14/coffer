@@ -27,6 +27,8 @@ trap 'rm -rf "$STAGING_DIR"' EXIT
 STAGING_APP="$STAGING_DIR/Planisphere.app"
 mkdir -p "$STAGING_APP/Contents/MacOS" "$STAGING_APP/Contents/Resources"
 cp "$BINARY_DIR/Planisphere" "$STAGING_APP/Contents/MacOS/Planisphere"
+mkdir -p "$STAGING_APP/Contents/Resources/Adapters"
+cp Integrations/Adapters/sandbox.py "$STAGING_APP/Contents/Resources/Adapters/sandbox.py"
 cp "$BINARY_DIR/planisphere-memory" "$STAGING_APP/Contents/MacOS/planisphere-memory"
 /usr/bin/python3 scripts/bundle-host.py "${PLANISPHERE_HOST_SOURCE:?Set PLANISPHERE_HOST_SOURCE to the pinned API internal directory}" "$STAGING_APP/Contents/Resources/Host"
 cp Resources/Info.plist "$STAGING_APP/Contents/Info.plist"
@@ -55,6 +57,18 @@ if len(base64.b64decode(key, validate=True)) != 32:
 info = plistlib.loads(path.read_bytes())
 info.update(SUFeedURL="https://www.planisphere.ooo/mac/appcast.xml", SUPublicEDKey=key,
             SURequireSignedFeed=True, SUVerifyUpdateBeforeExtraction=True)
+path.write_bytes(plistlib.dumps(info))
+PY
+fi
+if [ "${PLANISPHERE_LOCAL_ONLY:-0}" = "1" ]; then
+    /usr/bin/python3 - "$STAGING_APP/Contents/Info.plist" <<'PY'
+import plistlib, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+info = plistlib.loads(path.read_bytes())
+for key in ("SUFeedURL", "SUPublicEDKey"):
+    info.pop(key, None)
+info["PlanisphereBuildChannel"] = "local-integration"
 path.write_bytes(plistlib.dumps(info))
 PY
 fi
