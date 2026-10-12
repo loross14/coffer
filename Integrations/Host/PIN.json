@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/loross14/planisphere-api",
-  "commit": "71f1b88ebbc775cdfb8662843dce6e93baa50966",
+  "commit": "14344ccb00fdb358555e4f19e3711191910b195b",
   "files": {
     "install_response_controls.py": "33b140f4492d13a4a70077f961c3629f96cb9a464c66e22a3faf124462d75cc3",
     "planisphere_context.py": "89e973f58501d271f7de4d46ab904074bbabaf1f6d0c7d1f9a175536b831274b",
@@ -14,7 +14,7 @@
     "planisphere_instruction_gate.py": "73a7f4b50834796665e4bb26f83ce9b9d0c53169620894a8224c7506a40fd151",
     "planisphere_instructions.py": "31aa6d00e80ce69bb1f0aa54f2da31dbd64048c6dc9007c0208f1ff44de1d446",
     "planisphere_legacy_tasks.py": "1fc9ce93fc38498339d08d9231fc2402007ffd3716db4aafa371c4f5ad8daffd",
-    "planisphere_local_support.py": "7073041092ee068ea6e9cdd928758995bc8ee0c34ecf9ec9e9cb3aae22255adc",
+    "planisphere_local_support.py": "ec8c075e2bb144cd3e3260bd6ac31c4b1bc903f0e3598c6f6bef68330050bd1c",
     "planisphere_manual_evidence.py": "17d9915a4ed8d9eface6989595af38fdf3fcf6a300b26b5cebacfaf9d6b5752f",
     "planisphere_memory.py": "d61679a24c6f54da3ff8b89e0aa9659b7f337d5f29c181f31a5f07a244bb8f8e",
     "planisphere_memory_setup.py": "0f885d3aad827a40f3438152b1debb40f48784e0579598d8f756683d7b2de31f",
@@ -30,7 +30,7 @@
     "planisphere_shared_feedback.py": "87d0512a8d8aa9f0d3aaf60a3d111486a0b87219d56dfc09d975a635889c5b3a",
     "planisphere_source_views.py": "d9b9d0646236fd72db246cb74cdf82a7ba7cd4a393f71a01c371e4a246268d43",
     "planisphere_support_jobs.py": "1b100585edf05d80fd35591554f9b4ce7a83fd29627f6c5463c11b0da95cecfc",
-    "planisphere_support_settings.py": "313055c458a1957d2d62324a7412d756e39187c8dde15df756fe02d5b6033c95",
+    "planisphere_support_settings.py": "8f8d04c02cfb90c568cefd78568ef44dc7ad4a9c497eadcfee8cff26bd716115",
     "planisphere_tasks.py": "3f59a14ae4af18f3dc9b16e36871da0f56047c98a52891c39d0f20795eea2d52",
     "planisphere_work_views.py": "86402e403790d8cf230034788e2fa0676123afe97c3055a6715b0cc696a9915a"
   }
