@@ -18,7 +18,9 @@ struct VaultWorkspaceView: View {
                     Divider()
                 }
                 Group {
-                    if let surface = model.activitySurface {
+                    if model.activitySurface == .memory {
+                        MemoryWorkspaceView(model: model.memory)
+                    } else if let surface = model.activitySurface {
                         ConsoleWorkspaceView(model: model, surface: surface)
                     } else { workspace }
                 }.frame(width: max(0, bounds.size.width - (model.sidebarVisible ? 217 : 0)), height: bounds.size.height, alignment: .top)

@@ -15,6 +15,7 @@ struct PlanisphereApp: App {
                     guard url.scheme == "ooo.planisphere.mac", url.host == nil, url.query == nil, url.fragment == nil, model.canNavigateWorkspace else { return }
                     if url.path == "/prompts" { model.activitySurface = .prompts }
                     if url.path == "/hooks" { model.activitySurface = .hooks }
+                    if url.path == "/memory" { model.activitySurface = .memory }
                 }
         }
         .defaultSize(width: 1320, height: 820)
