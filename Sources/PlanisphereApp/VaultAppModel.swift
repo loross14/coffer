@@ -22,6 +22,7 @@ private struct PruningAttempt: Codable {
 final class VaultAppModel {
     let console = ConsoleConnectionModel()
     let activity = WorkspaceActivityModel()
+    let memory: MemoryModel
     var activitySurface: ActivitySurface?
     var sidebarVisible = true
     var commandPalettePresented = false
@@ -80,6 +81,7 @@ final class VaultAppModel {
             historyURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("Planisphere", isDirectory: true)
         }
+        memory = MemoryModel(root: historyURL.appendingPathComponent("Memory", isDirectory: true))
         do { store = try VaultStore(rootURL: historyURL) }
         catch { startupError = error.localizedDescription }
     }
@@ -127,6 +129,7 @@ final class VaultAppModel {
                 _ = try await store.register(url: URL(fileURLWithPath: path, isDirectory: true), name: nil)
             }
             try await self.reloadVaults(store: store)
+            if self.vaults.isEmpty { self.activitySurface = .memory }
         }
     }
 

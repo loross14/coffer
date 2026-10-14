@@ -5,7 +5,8 @@ REPO_ROOT="$PWD"
 CONFIGURATION="${CONFIGURATION:-release}"
 OUTPUT_DIR="${PLANISPHERE_OUTPUT_DIR:-$REPO_ROOT/dist}"
 APP_PATH="$OUTPUT_DIR/Planisphere.app"
-MODULE_CACHE="$REPO_ROOT/.build/ModuleCache"
+BUILD_DIR="${PLANISPHERE_BUILD_DIR:-$REPO_ROOT/.build}"
+MODULE_CACHE="$BUILD_DIR/ModuleCache"
 PYTHON_ARCHIVE="${PLANISPHERE_PYTHON_ARCHIVE:-$REPO_ROOT/.build/python-runtime.tar.gz}"
 PYTHON_WHEELS="${PLANISPHERE_PYTHON_WHEELS:-$REPO_ROOT/.build/python-wheels}"
 if [ ! -f "$PYTHON_ARCHIVE" ]; then
@@ -18,8 +19,9 @@ if [ "$(uname -m)" != "arm64" ]; then
 fi
 mkdir -p "$OUTPUT_DIR" "$MODULE_CACHE"
 export CLANG_MODULE_CACHE_PATH="$MODULE_CACHE"
-swift build --disable-sandbox -c "$CONFIGURATION" --product Planisphere
-BINARY_DIR="$(swift build --disable-sandbox -c "$CONFIGURATION" --show-bin-path)"
+swift build --disable-sandbox --scratch-path "$BUILD_DIR" -c "$CONFIGURATION" --product Planisphere
+swift build --disable-sandbox --scratch-path "$BUILD_DIR" -c "$CONFIGURATION" --product planisphere-memory
+BINARY_DIR="$(swift build --disable-sandbox --scratch-path "$BUILD_DIR" -c "$CONFIGURATION" --show-bin-path)"
 STAGING_DIR="$(mktemp -d "$OUTPUT_DIR/.package.XXXXXX")"
 trap 'rm -rf "$STAGING_DIR"' EXIT
 STAGING_APP="$STAGING_DIR/Planisphere.app"
@@ -27,6 +29,8 @@ mkdir -p "$STAGING_APP/Contents/MacOS" "$STAGING_APP/Contents/Resources"
 cp "$BINARY_DIR/Planisphere" "$STAGING_APP/Contents/MacOS/Planisphere"
 mkdir -p "$STAGING_APP/Contents/Resources/Adapters"
 cp Integrations/Adapters/sandbox.py "$STAGING_APP/Contents/Resources/Adapters/sandbox.py"
+cp "$BINARY_DIR/planisphere-memory" "$STAGING_APP/Contents/MacOS/planisphere-memory"
+/usr/bin/python3 scripts/bundle-host.py "${PLANISPHERE_HOST_SOURCE:?Set PLANISPHERE_HOST_SOURCE to the pinned API internal directory}" "$STAGING_APP/Contents/Resources/Host"
 cp Resources/Info.plist "$STAGING_APP/Contents/Info.plist"
 ditto Resources/ThirdPartyNotices "$STAGING_APP/Contents/Resources/ThirdPartyNotices"
 mkdir -p "$STAGING_APP/Contents/Resources/Grapheine"
@@ -40,7 +44,7 @@ cp Integrations/Grapheine/reader-provenance.json "$STAGING_APP/Contents/Resource
 /usr/bin/python3 scripts/bundle-grapheine.py "${PLANISPHERE_GRAPHEINE_SOURCE:-$REPO_ROOT/../Grapheine}" "$STAGING_APP/Contents/Resources/Grapheine/engine"
 /usr/bin/python3 scripts/bundle-python.py "$PYTHON_ARCHIVE" "$STAGING_APP/Contents/Frameworks/Python.framework" "$PYTHON_WHEELS"
 SWIFTPM_IDENTITY="$(basename "$REPO_ROOT" | tr '[:upper:]' '[:lower:]')"
-SPARKLE_FRAMEWORK="$REPO_ROOT/.build/artifacts/$SWIFTPM_IDENTITY/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+SPARKLE_FRAMEWORK="$BUILD_DIR/artifacts/$SWIFTPM_IDENTITY/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
 ditto "$BINARY_DIR/SwiftTerm_SwiftTerm.bundle" "$STAGING_APP/Contents/Resources/SwiftTerm_SwiftTerm.bundle"
 ditto "$SPARKLE_FRAMEWORK" "$STAGING_APP/Contents/Frameworks/Sparkle.framework"
 if [ -n "${PLANISPHERE_UPDATE_PUBLIC_KEY:-}" ]; then
@@ -53,6 +57,18 @@ if len(base64.b64decode(key, validate=True)) != 32:
 info = plistlib.loads(path.read_bytes())
 info.update(SUFeedURL="https://www.planisphere.ooo/mac/appcast.xml", SUPublicEDKey=key,
             SURequireSignedFeed=True, SUVerifyUpdateBeforeExtraction=True)
+path.write_bytes(plistlib.dumps(info))
+PY
+fi
+if [ "${PLANISPHERE_LOCAL_ONLY:-0}" = "1" ]; then
+    /usr/bin/python3 - "$STAGING_APP/Contents/Info.plist" <<'PY'
+import plistlib, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+info = plistlib.loads(path.read_bytes())
+for key in ("SUFeedURL", "SUPublicEDKey"):
+    info.pop(key, None)
+info["PlanisphereBuildChannel"] = "local-integration"
 path.write_bytes(plistlib.dumps(info))
 PY
 fi

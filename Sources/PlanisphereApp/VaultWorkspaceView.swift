@@ -18,7 +18,9 @@ struct VaultWorkspaceView: View {
                     Divider()
                 }
                 Group {
-                    if model.activitySurface == .terminal {
+                    if model.activitySurface == .memory {
+                        MemoryWorkspaceView(model: model.memory)
+                    } else if model.activitySurface == .terminal {
                         TerminalWorkspaceView(store: TerminalWorkspaceModel.shared, initialDirectory: model.selectedVault.map { URL(fileURLWithPath: $0.path) })
                     } else if model.activitySurface == .adapters {
                         AdapterSandboxView(model: AdapterSandboxModel.shared)
