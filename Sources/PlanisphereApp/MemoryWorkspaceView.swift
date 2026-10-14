@@ -12,18 +12,20 @@ struct MemoryWorkspaceView: View {
     private var filtered: [MemoryFact] {
         model.facts.filter { query.isEmpty || $0.body.localizedCaseInsensitiveContains(query) || $0.scope.localizedCaseInsensitiveContains(query) }
     }
-    private var setupTitle: String {
-        switch model.setupStatus {
-        case "installed": "Codex setup is installed"
-        case "disabled": "Codex memory hooks are disabled"
-        default: "Take your memory into Codex"
+    static func agentLine(_ host: AgentHost, status: String?) -> String {
+        switch status {
+        case "installed": host == .codex ? "Connected. Review the hooks in Codex, then start a new chat."
+                                         : "Connected. Start a new session; if asked, review the hooks in /hooks."
+        case "disabled": "Connected, but its Planisphere hooks are turned off in \(host.name)."
+        case "not_installed": "Not connected"
+        default: "Status not checked yet"
         }
     }
-    private var setupDetail: String {
-        switch model.setupStatus {
-        case "installed": "Review the hooks in Codex, then start a new chat. Automatic memory access has not yet been verified."
-        case "disabled": "Your disabled hooks have been preserved. Review them in Codex when you want memory access."
-        default: "Add local hooks, review them in Codex, then continue in a new chat. Existing hooks and task records are preserved."
+    private func agentColor(_ status: String?) -> Color {
+        switch status {
+        case "installed": Color(nsColor: .systemGreen)
+        case "disabled": Color(nsColor: .systemOrange)
+        default: Color.secondary.opacity(0.5)
         }
     }
     var body: some View {
@@ -48,20 +50,7 @@ struct MemoryWorkspaceView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    HStack(alignment: .center, spacing: 18) {
-                        Image(systemName: "point.3.connected.trianglepath.dotted").font(.title2).foregroundStyle(PSStyle.accent)
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(setupTitle).font(.callout.weight(.semibold))
-                            Text(setupDetail)
-                                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                        }
-                        Spacer()
-                        if ["installed", "disabled"].contains(model.setupStatus) {
-                            Button("Check setup") { Task { await model.refresh() } }.buttonStyle(PSButtonStyle()).disabled(model.busy)
-                        } else {
-                            Button("Connect Codex") { Task { await model.connectCodex() } }.buttonStyle(PSButtonStyle()).disabled(model.busy)
-                        }
-                    }.padding(20).background(PSStyle.surface, in: RoundedRectangle(cornerRadius: 14))
+                    AgentConnectionsCard(model: model, line: Self.agentLine, color: agentColor)
                     LocalSupportCard(model: model.support, openLocal: openLocal)
                     if !model.enabled { Label("Saving is paused. Existing memories remain available.", systemImage: "pause.circle").foregroundStyle(.secondary) }
                     if let message = model.message { Text(message).font(.callout).textSelection(.enabled) }
@@ -120,5 +109,42 @@ struct MemoryWorkspaceView: View {
             Button("Forget memory", role: .destructive) { if let fact = forgetting { Task { await model.forget(fact) } }; forgetting = nil }
             Button("Cancel", role: .cancel) { forgetting = nil }
         } message: { Text("Its saved revisions will be removed. Original chats, tasks and separate exports will remain.") }
+    }
+}
+
+/// One row per agent app: whether Planisphere's memory hooks are in it, and the one action that fits.
+struct AgentConnectionsCard: View {
+    @Bindable var model: MemoryModel
+    let line: (AgentHost, String?) -> String
+    let color: (String?) -> Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 18) {
+                Image(systemName: "point.3.connected.trianglepath.dotted").font(.title2).foregroundStyle(PSStyle.accent)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Take your memory into your agents").font(.callout.weight(.semibold))
+                    Text("Planisphere adds local hooks to each app you connect. Your other hooks and settings stay as they are.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            ForEach(AgentHost.allCases) { host in
+                Divider()
+                HStack(alignment: .center, spacing: 12) {
+                    Circle().fill(color(model.agentStatus[host])).frame(width: 7, height: 7)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(host.name).font(.callout.weight(.medium))
+                        Text(line(host, model.agentStatus[host])).font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 12)
+                    if ["installed", "disabled"].contains(model.agentStatus[host]) {
+                        Button("Check setup") { Task { await model.refresh() } }
+                    } else {
+                        Button("Connect \(host.name)") { Task { await model.connect(host) } }
+                    }
+                }.buttonStyle(PSButtonStyle()).disabled(model.busy)
+            }
+        }.padding(20).background(PSStyle.surface, in: RoundedRectangle(cornerRadius: 14))
     }
 }

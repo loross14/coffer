@@ -23,17 +23,14 @@ final class MemoryModel {
     private(set) var loaded = false
     private(set) var remaining = 0
     private(set) var pendingRepairs = 0
-    private(set) var setupStatus = "unknown"
+    /// Per agent app: installed, disabled, not_installed or unknown.
+    private(set) var agentStatus: [AgentHost: String] = [:]
     var message: String?
     private var cursor: String?
     private let service: LocalMemory
     private let installer = MemoryHostInstaller()
     let root: URL
     let support: LocalSupportModel
-    private var codexHome: URL {
-        ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
-    }
 
     init(root: URL? = nil, helper: URL? = nil) {
         let defaultRoot = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -68,21 +65,29 @@ final class MemoryModel {
             let result = try await page(more ? cursor : nil)
             facts = more ? facts + result.facts : result.facts
             cursor = result.cursor; remaining = result.remaining; loaded = true; message = nil
-            setupStatus = (try? await installer.connect(root: root, home: codexHome, statusOnly: true)) ?? "unknown"
+            await refreshAgents()
         } catch { message = String(describing: error) }
+    }
+    private func refreshAgents() async {
+        for host in AgentHost.allCases {
+            agentStatus[host] = (try? await installer.connect(root: root, home: host.home, host: host, statusOnly: true)) ?? "unknown"
+        }
     }
     func setEnabled(_ value: Bool) async {
         guard !busy else { return }
         do { _ = try await call("configure", ["enabled": value]); await refresh() }
         catch { message = String(describing: error) }
     }
-    func connectCodex() async {
+    #if DEBUG
+    func preview(agents: [AgentHost: String], message: String? = nil) { agentStatus = agents; self.message = message }
+    #endif
+    func connect(_ host: AgentHost) async {
         guard !busy else { return }; busy = true; defer { busy = false }
         do {
             _ = try await call("status")
-            message = try await installer.connect(root: root, home: codexHome)
-            setupStatus = (try? await installer.connect(root: root, home: codexHome, statusOnly: true)) ?? "unknown"
+            message = try await installer.connect(root: root, home: host.home, host: host)
         } catch { message = String(describing: error) }
+        agentStatus[host] = (try? await installer.connect(root: root, home: host.home, host: host, statusOnly: true)) ?? "unknown"
     }
     func save(_ body: String, replacing fact: MemoryFact?) async -> Bool {
         guard !busy else { return false }; busy = true

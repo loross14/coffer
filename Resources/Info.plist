@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.9.2</string>
+	<string>0.9.3</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -30,17 +30,17 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>22</string>
+	<string>23</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
-	<key>PlanisphereConsoleConnectionEnabled</key>
-	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Planisphere. Native vault management, descended from Coffer.</string>
+	<key>PlanisphereConsoleConnectionEnabled</key>
+	<true/>
 	<key>SUFeedURL</key>
 	<string>https://www.planisphere.ooo/mac/appcast.xml</string>
 	<key>SUPublicEDKey</key>
