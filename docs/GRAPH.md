@@ -12,6 +12,12 @@ Discovery is bounded to 20,000 admitted notes and 256 MiB. The graph returns at 
 
 Refresh takes a new snapshot. Surviving paths retain their positions and pins in the current view; leaving the view or switching vault starts a new view session. Background reads cancel on departure and stale results cannot replace the newly selected vault. Selecting a note reads its current text independently; refresh re-reads a selected preview. The graph is not an automatic filesystem watcher.
 
+## Measurement
+
+The inspector's Measure section and the dock's chart button run the pinned engine's `graph measure` on a private copy of the admitted Markdown (the same discovery scope and limits as the graph). The result is a `grapheine-measure-v1` document bound to the discovery fingerprint: notes and links, degree, density, components, orphans and unresolved links, the Fiedler value, communities and modularity, clustering and triangles, girth, bipartiteness, the most connected notes and balanced bridges. Heavy measurements are skipped above 5,000 notes and the panel says which. The engine's basis line is shown verbatim: these are heuristics about explicit links, not authority or truth. Measuring reads files only.
+
+Links in the graph and in measurements resolve under the engine's single rule (`LINK_RULE`): exact vault-relative path when the destination contains `/`, source-relative for `./` and `../`, otherwise note basename or frontmatter alias, case-insensitive; duplicate basenames resolve to the same folder, then the shortest path, and are counted as ambiguous. Self-links are ignored. The adapter imports the engine's parser, so `grapheine health` on the same folder counts the same edges.
+
 ## Layout and interaction
 
 The graph occupies the workspace below a compact vault header. Search and counts float at the top; Fit, Pause/Resume, Refresh, Settings and Snapshot scope sit in a small bottom dock. Settings contains neighborhood, unlinked notes, spacing, pins and Arrange Again. Selecting or searching opens the details panel; closing it preserves the selection and search until an explicit new interaction reopens it. **⌘F** focuses graph search. All controls have accessible labels and native tooltips.

@@ -29,6 +29,10 @@ final class VaultGraphModel {
     var fitRequest = 0
     var focusRequest = 0
     var arrangeRequest = 0
+    var measurement: GraphMeasurement?
+    var measuring = false
+    var measureError: String?
+    private var measureTask: Task<Void, Never>?
     private let service = GrapheineService()
     private var requestID = UUID()
     private var noteTask: Task<Void, Never>?
@@ -63,6 +67,7 @@ final class VaultGraphModel {
     }
 
     func load(vault: VaultRecord) async {
+        measureTask?.cancel(); measurement = nil; measureError = nil; measuring = false
         searchTask?.cancel()
         contentMatches = []
         searchError = nil
@@ -145,7 +150,28 @@ final class VaultGraphModel {
         }
     }
 
-    func stop() { noteTask?.cancel(); searchTask?.cancel() }
+    func stop() { noteTask?.cancel(); searchTask?.cancel(); measureTask?.cancel() }
+
+    /// Measure the current snapshot's graph. Read-only: the bridge measures a
+    /// private copy of the admitted Markdown and binds the result to the scan.
+    func measure(vault: VaultRecord) {
+        guard !measuring else { return }
+        measureTask?.cancel()
+        measuring = true
+        measureError = nil
+        let service = service
+        measureTask = Task {
+            do {
+                let document = try await service.measure(vaultURL: vault.url)
+                guard !Task.isCancelled else { return }
+                measurement = document
+            } catch is CancellationError {
+            } catch {
+                measureError = error.localizedDescription
+            }
+            measuring = false
+        }
+    }
 
     func openNote(vault: VaultRecord) {
         guard let id = selectedID else { return }
@@ -317,6 +343,8 @@ struct VaultGraphView: View {
             PSIconButton(symbol: "arrow.clockwise", help: "Refresh graph") { refresh() }
                 .disabled(graph.loading).accessibilityIdentifier("graph-refresh")
             Rectangle().fill(PSStyle.border).frame(width: 1, height: 18).padding(.horizontal, 5)
+            PSIconButton(symbol: "chart.bar.xaxis", help: "Measure graph") { inspectorPresented = true; graph.measure(vault: vault) }
+                .accessibilityIdentifier("graph-measure")
             PSIconButton(symbol: "slider.horizontal.3", help: "Graph settings") { settingsPresented.toggle() }
                 .accessibilityIdentifier("graph-settings")
                 .popover(isPresented: $settingsPresented, arrowEdge: .bottom) { graphSettings }
@@ -464,6 +492,8 @@ struct VaultGraphView: View {
                             Text("Choose a note to read it and explore its connections.")
                                 .font(.system(size: 12)).foregroundStyle(.secondary).lineSpacing(3)
                         }
+                        measurementSection(snapshot)
+                        Divider()
                         VStack(alignment: .leading, spacing: 7) {
                             PSSectionLabel(title: "Well connected").padding(.bottom, 3)
                             ForEach(graph.matches.prefix(8)) { node in noteButton(node) }
@@ -486,6 +516,83 @@ struct VaultGraphView: View {
         }
         .background(PSStyle.surface)
         .overlay(alignment: .leading) { Rectangle().fill(PSStyle.border).frame(width: 1) }
+    }
+
+    @ViewBuilder
+    private func measurementSection(_ snapshot: GraphSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                PSSectionLabel(title: "Measure")
+                Spacer()
+                if graph.measuring { ProgressView().controlSize(.small) }
+                else {
+                    Button(graph.measurement == nil ? "Measure graph" : "Measure again", systemImage: "chart.bar.xaxis") { graph.measure(vault: vault) }
+                        .buttonStyle(PSButtonStyle(primary: graph.measurement == nil)).accessibilityIdentifier("graph-measure-inspector")
+                }
+            }
+            if let error = graph.measureError {
+                Text(error).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else if let m = graph.measurement {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(measurementRows(m), id: \.0) { label, value in
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(label).foregroundStyle(.secondary)
+                            Spacer(minLength: 8)
+                            Text(value).monospacedDigit().multilineTextAlignment(.trailing)
+                        }.font(.system(size: 12))
+                    }
+                }
+                if let reading = m.values.spectrum?.reading {
+                    Text(reading).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                if let hubs = m.values.degree?.top.prefix(3), !hubs.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Most connected").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                        ForEach(Array(hubs)) { hub in
+                            HStack { Text(hub.path).lineLimit(1).truncationMode(.middle); Spacer(); Text("\(hub.degree ?? 0)").monospacedDigit().foregroundStyle(.secondary) }
+                                .font(.system(size: 11))
+                        }
+                    }
+                }
+                if let bridges = m.values.dirac?.candidates.prefix(3), !bridges.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Balanced bridges").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                        ForEach(Array(bridges)) { bridge in
+                            HStack { Text(bridge.path).lineLimit(1).truncationMode(.middle); Spacer(); Text(String(format: "%.2f", bridge.score ?? 0)).monospacedDigit().foregroundStyle(.secondary) }
+                                .font(.system(size: 11))
+                        }
+                    }
+                }
+                ForEach(m.skipped.sorted(by: { $0.key < $1.key }), id: \.key) { name, reason in
+                    Text("\(name) skipped: \(reason)").font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Text(m.basis).font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text("Engine \(m.engine) · \(m.graph.nodes.formatted()) notes · \(m.graph.edges.formatted()) links · \(String(format: "%.1f", m.elapsed)) s · scan \(m.fingerprint.prefix(8))")
+                    .font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Degree, density, connectivity, communities and bridges, read from a private copy of your Markdown. Nothing is changed or uploaded.")
+                    .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func measurementRows(_ m: GraphMeasurement) -> [(String, String)] {
+        var rows: [(String, String)] = []
+        let v = m.values
+        if let h = v.health { rows.append(("Notes · links", "\(h.nodes.formatted()) · \(h.edges.formatted())")) }
+        if let d = v.degree { rows.append(("Degree mean · median · max", "\(String(format: "%.2f", d.mean)) · \(d.median.formatted()) · \(d.max)")) }
+        if let d = v.density, let density = d.density { rows.append(("Density", String(format: "%.4f", density))) }
+        if let c = v.components { rows.append(("Components · isolates", "\(c.components) · \(c.isolates)")) }
+        if let h = v.health { rows.append(("Orphans · unresolved", "\(h.orphans) · \(h.unresolved)")) }
+        if let s = v.spectrum {
+            let fiedler = s.fiedler.map { String(format: "%.3f", $0) } ?? "—"
+            rows.append(("Fiedler λ₂", fiedler))
+        }
+        if let c = v.communities { rows.append(("Communities · modularity", "\(c.communities) · \(c.modularity.map { String(format: "%.3f", $0) } ?? "—")")) }
+        if let c = v.clustering, let t = v.triangles { rows.append(("Clustering · triangles", "\(String(format: "%.3f", c.avg_local_clustering)) · \(t.triangles.formatted())")) }
+        if let g = v.girth { rows.append(("Girth", g.acyclic ? "acyclic" : "\(g.girth ?? 0)")) }
+        if let b = v.bipartite { rows.append(("Bipartite", b.bipartite ? "yes" : "no (\(b.A)/\(b.B))")) }
+        return rows
     }
 
     private func noteButton(_ node: GraphNode) -> some View {

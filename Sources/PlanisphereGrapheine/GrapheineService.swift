@@ -58,6 +58,46 @@ public actor GrapheineService {
         return try Self.validatedGraph(data, vaultURL: vaultURL, includeDocuments: includeDocuments)
     }
 
+    /// Measure the admitted Markdown graph. The bridge stages a private copy, the
+    /// engine measures it, and the result is bound to the discovery fingerprint.
+    /// Heavy measurements are skipped above `gate` notes (0 disables the gate).
+    public func measure(vaultURL: URL, gate: Int = 5_000, top: Int = 10) async throws -> GraphMeasurement {
+        guard (0...1_000_000).contains(gate), (1...1_000).contains(top) else {
+            throw GrapheineError.invalidResponse("Measurement bounds are out of range.")
+        }
+        let data = try await invoke("measure", vaultURL: vaultURL, policyURL: nil, arguments: ["--gate", String(gate), "--top", String(top)])
+        return try Self.validatedMeasurement(data, vaultURL: vaultURL)
+    }
+
+    internal nonisolated static func validatedMeasurement(_ data: Data, vaultURL: URL) throws -> GraphMeasurement {
+        guard data.count <= 8 * 1024 * 1024 else {
+            throw GrapheineError.invalidResponse("The measurement report exceeds the supported size.")
+        }
+        let document = try JSONDecoder().decode(GraphMeasurement.self, from: data)
+        guard document.schema == "grapheine-measure-v1", document.vaultPath == vaultURL.path,
+              document.vault.roots == [vaultURL.path], !document.scannedAt.isEmpty, document.scannedAt.count <= 100,
+              !document.measured_at.isEmpty, document.measured_at.count <= 100,
+              document.fingerprint.count == 64, document.fingerprint.allSatisfy({ "0123456789abcdef".contains($0) }),
+              (0...20_000).contains(document.graph.nodes), (0...1_000_000).contains(document.graph.edges),
+              document.noteCount == document.graph.nodes, document.elapsed >= 0,
+              document.skipped.count <= 32, document.timings.count <= 32,
+              document.basis.utf8.count <= 1_024, document.link_rule.utf8.count <= 4_096, document.engine.count <= 32,
+              document.skipped.values.allSatisfy({ $0.utf8.count <= 512 }) else {
+            throw GrapheineError.invalidResponse("The measurement report is incomplete or belongs to another vault.")
+        }
+        try validateScope(document.scope)
+        if let health = document.values.health {
+            guard health.nodes == document.graph.nodes, health.edges == document.graph.edges,
+                  health.orphans <= health.nodes, health.isolates <= health.nodes else {
+                throw GrapheineError.invalidResponse("The measurement report has inconsistent counts.")
+            }
+        }
+        for path in document.namedPaths {
+            try validateRelativePath(path)
+        }
+        return document
+    }
+
     public func readDocument(vaultURL: URL, path: String, location: DocumentLocation? = nil, includeDocuments: Bool = false) async throws -> DocumentRead {
         try Self.validateRelativePath(path)
         var args = ["--path", path]

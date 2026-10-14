@@ -10,6 +10,13 @@ import unittest
 from unittest.mock import patch
 
 PROJECT = Path(__file__).resolve().parents[1]
+import argparse
+import sys
+_parser = argparse.ArgumentParser(add_help=False)
+_parser.add_argument("--engine-root", type=Path, default=PROJECT.parent / "Grapheine")
+_known, _remaining = _parser.parse_known_args()
+ENGINE = _known.engine_root.resolve()
+sys.argv = [sys.argv[0], *_remaining]
 
 
 def load(name, path):
@@ -21,29 +28,30 @@ def load(name, path):
 
 G = load("graph_adapter", PROJECT / "Integrations/Grapheine/graph_adapter.py")
 B = load("native_graph_bridge", PROJECT / "Integrations/Grapheine/bridge.py")
+ENGINE_MODULE, _ = B.load_engine(ENGINE)
 
 
 class GraphAdapterTests(unittest.TestCase):
     def graph(self, texts, **options):
-        return G.build_graph(texts, "/vault", **options)
+        return G.build_graph(texts, "/vault", engine=ENGINE_MODULE, **options)
 
     def pairs(self, graph):
         return {(edge["source"], edge["target"]) for edge in graph["edges"]}
 
-    def test_exact_paths_relative_links_deduplication_and_self_edges(self):
+    def test_exact_paths_relative_links_deduplication_and_ignored_self_links(self):
         result = self.graph({"A.md": "[[Folder/B]] [[Folder/B|B]] [[A]] [B](Folder/B.md)",
                              "Folder/B.md": "[A](../A.md) [[#Heading]]", "Empty.md": ""})
-        self.assertEqual(self.pairs(result), {("A.md", "Folder/B.md"), ("Folder/B.md", "A.md"), ("A.md", "A.md")})
+        self.assertEqual(self.pairs(result), {("A.md", "Folder/B.md"), ("Folder/B.md", "A.md")})
         nodes = {node["id"]: node for node in result["nodes"]}
-        self.assertEqual((nodes["A.md"]["degree"], nodes["A.md"]["inDegree"], nodes["A.md"]["outDegree"]), (4, 2, 2))
+        self.assertEqual((nodes["A.md"]["degree"], nodes["A.md"]["inDegree"], nodes["A.md"]["outDegree"]), (2, 1, 1))
         self.assertEqual(nodes["Empty.md"]["degree"], 0)
 
-    def test_duplicate_stems_are_ambiguous_and_frontmatter_aliases_are_not_joined(self):
-        result = self.graph({"Read.md": "[[Note]] [[Alias]] [[One/Note]] [relative](Two/Note.md)",
+    def test_duplicate_stems_resolve_by_shortest_path_and_count_as_ambiguous(self):
+        result = self.graph({"Read.md": "[[Note]] [[Alias]] [[One/Note]] [relative](Two/Note.md) [[Nowhere]]",
                              "One/Note.md": '---\naliases: [Alias, "[[Read]]"]\n---\n', "Two/Note.md": ""})
         self.assertEqual(self.pairs(result), {("Read.md", "One/Note.md"), ("Read.md", "Two/Note.md")})
-        self.assertEqual(result["ambiguousLinkCount"], 1)
-        self.assertEqual(result["unresolvedLinkCount"], 1)
+        self.assertEqual(result["ambiguousLinkCount"], 1)   # [[Note]] tie-broken to One/Note.md
+        self.assertEqual(result["unresolvedLinkCount"], 1)  # [[Nowhere]]; [[Alias]] now resolves through frontmatter
 
     def test_code_comments_and_escaped_links_are_not_edges(self):
         literals = ["`[[B]]`", "``x ` [[B]] x``", "```md\n[[B]]\n```", "~~~\n[[B]]\n~~~",
@@ -118,7 +126,7 @@ class GraphAdapterTests(unittest.TestCase):
             }
             for name, body in sources.items():
                 (root / name).write_text(body)
-            graph, _ = B.load_engine(PROJECT.parent / "Grapheine")
+            graph, _ = B.load_engine(ENGINE)
             result = B.graph_snapshot(graph, root, documents=True)
             self.assertEqual({node["id"] for node in result["nodes"]}, set(sources))
             self.assertEqual(self.pairs(result), {("Read.md", "model.py"), ("Read.md", "paper.pdf"), ("Main.TEX", "proof.tex")})
@@ -142,7 +150,7 @@ class GraphAdapterTests(unittest.TestCase):
             (root / "Real.tex").write_text(r"\% real percent \ref{target}" + "\n" + r"\\\ref{target}")
             for index, literal in enumerate(literals):
                 (root / f"Example{index}.tex").write_text(literal)
-            graph, _ = B.load_engine(PROJECT.parent / "Grapheine")
+            graph, _ = B.load_engine(ENGINE)
             result = B.graph_snapshot(graph, root, documents=True)
             self.assertEqual(self.pairs(result), {("Real.tex", "Target.tex")})
             self.assertEqual(result["ambiguousLinkCount"], 0)
@@ -168,7 +176,7 @@ class GraphAdapterTests(unittest.TestCase):
                        "model.py": "raise RuntimeError('Source must never execute')"}
             for name, body in sources.items():
                 (root / name).write_text(body)
-            graph, authority = B.load_engine(PROJECT.parent / "Grapheine")
+            graph, authority = B.load_engine(ENGINE)
             with patch.dict(os.environ, {"PLANISPHERE_READER_CACHE": str(Path(tmp) / "cache")}):
                 for after_document_failure in (False, True):
                     if after_document_failure:
@@ -196,7 +204,7 @@ class GraphAdapterTests(unittest.TestCase):
                 (root / name).write_text(body)
             (root / ".planisphere/scope.json").write_text(json.dumps({"excludedPaths": ["Ignored/"]}))
             (root / "linked.md").symlink_to(root / "Notes/Target.md")
-            graph, _ = B.load_engine(PROJECT.parent / "Grapheine")
+            graph, _ = B.load_engine(ENGINE)
             with patch.object(B, "authority_scan", side_effect=AssertionError("graph must not inspect authority")):
                 result = B.graph_snapshot(graph, root)
             self.assertEqual({node["id"] for node in result["nodes"]}, set(notes))

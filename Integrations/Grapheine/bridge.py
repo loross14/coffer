@@ -25,9 +25,9 @@ import types
 import unicodedata
 
 sys.dont_write_bytecode = True
-ENGINE_COMMIT = "79c6b457018bd0eba1c890311c0b8351b97ff041"
+ENGINE_COMMIT = "cc0d28914306140c593351636401884ea5e4f1c9"
 ENGINE_HASHES = {
-    "grapheine.py": "3ef2bfb3f458719bf0ffc040b8bb6ab74d6763d3de9a7d0579f956c58df4d99f",
+    "grapheine.py": "201d2207a4b0caad5a53818c36e874c8ad5e5e6d5aa54370c1be1ee3721b8451",
     "grapheine_authority.py": "cc531bd2abc8c9a8e3174ed180aeb1269497d118366bb7985c51d6c866b097a4",
 }
 MAX_JSON_BYTES = 32 * 1024 * 1024
@@ -828,7 +828,7 @@ def document_graph(graph, root, builder):
             for match in re.finditer(r"\\(?:input|include)\s*\{([^{}]+)\}", text):
                 destination = match[1] if match[1].lower().endswith(".tex") else match[1] + ".tex"
                 extra[path].append(("markdown", destination))
-        result = builder(texts, str(root), formats=formats, extra_links=extra)
+        result = builder(texts, str(root), engine=graph, formats=formats, extra_links=extra)
         unresolved = sum(1 for path, text in tex.items() for match in graph.TEX_REF_RE.finditer(text)
                          if not owners.get(match.group(1).strip()))
         ambiguous = sum(1 for path, text in tex.items() for match in graph.TEX_REF_RE.finditer(text)
@@ -861,11 +861,41 @@ def graph_snapshot(graph, root, *, documents=False):
         stage = Path(temporary).resolve()
         before = discovery_inventory(root, graph, destination=stage)
         texts = {name: (stage / name).read_bytes().decode("utf-8") for name in before["files"]}
-        result = namespace["build_graph"](texts, str(root))
+        result = namespace["build_graph"](texts, str(root), engine=graph)
         if discovery_inventory(root, graph) != before:
             raise BridgeError("Vault or exclusions changed while loading the graph. Refresh the graph.")
     return {**result, "vaultPath": str(root), "scannedAt": datetime.now(timezone.utc).isoformat(),
             "scope": before["scope"]}
+
+
+MEASURE_SETS = {"lattice", "health", "degree", "density", "components", "triangles", "clustering", "girth",
+                "bipartite", "spectrum", "dirac", "pagerank", "communities", "hubs"}
+
+
+def graph_measure(graph, root, *, sets="lattice", gate=5000, top=10):
+    """Run the engine's lattice measurements on a private copy of the admitted Markdown.
+
+    The engine never sees the live vault: discovery stages the included notes
+    into a private folder, the engine measures that folder, and the result is
+    bound to the discovery fingerprint so a measurement can be matched to the
+    exact note set it describes. Scores are heuristics, not authority.
+    """
+    import tempfile
+    wanted = tuple(part.strip() for part in str(sets).split(",") if part.strip())
+    if not wanted or any(part not in MEASURE_SETS for part in wanted):
+        raise BridgeError("Unsupported measurement set.")
+    if not isinstance(gate, int) or gate < 0 or gate > 1_000_000 or not isinstance(top, int) or top < 1 or top > 1000:
+        raise BridgeError("Measurement bounds must be integers within the supported range.")
+    with tempfile.TemporaryDirectory(prefix=".planisphere-measure-") as temporary:
+        stage = Path(temporary).resolve()
+        before = discovery_inventory(root, graph, destination=stage)
+        document = graph.measure([stage], sets=wanted, gate=gate or None, top=top)
+        if discovery_inventory(root, graph) != before:
+            raise BridgeError("Vault or exclusions changed while measuring. Measure again.")
+    document["vault"] = {"name": root.name, "roots": [str(root)]}
+    return {**document, "vaultPath": str(root), "scannedAt": datetime.now(timezone.utc).isoformat(),
+            "scope": before["scope"], "fingerprint": discovery_fingerprint(before),
+            "noteCount": len(before["files"])}
 
 
 def main(argv=None):
@@ -873,7 +903,7 @@ def main(argv=None):
         def error(self, message):
             raise BridgeError(message)
     parser = JSONArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["scan", "graph", "graph-documents", "read-document", "search-documents", "prepare", "apply", "prepare-local", "verify-local"])
+    parser.add_argument("action", choices=["scan", "graph", "graph-documents", "measure", "read-document", "search-documents", "prepare", "apply", "prepare-local", "verify-local"])
     parser.add_argument("--engine-root", required=True)
     parser.add_argument("--vault", required=True)
     parser.add_argument("--policy")
@@ -889,6 +919,9 @@ def main(argv=None):
     parser.add_argument("--page", type=int)
     parser.add_argument("--line", type=int)
     parser.add_argument("--markdown-only", action="store_true")
+    parser.add_argument("--set", default="lattice")
+    parser.add_argument("--gate", type=int, default=5000)
+    parser.add_argument("--top", type=int, default=10)
     try:
         args = parser.parse_args(argv)
         root = safe_path(args.vault, directory=True)
@@ -905,6 +938,10 @@ def main(argv=None):
                 if args.policy:
                     raise BridgeError("Graph discovery does not use an authority policy.")
                 result = graph_snapshot(graph, root, documents=args.action == "graph-documents")
+            elif args.action == "measure":
+                if args.policy:
+                    raise BridgeError("Measurement does not use an authority policy.")
+                result = graph_measure(graph, root, sets=args.set, gate=args.gate, top=args.top)
             elif args.action in ("prepare-local", "verify-local"):
                 if args.policy:
                     raise BridgeError("A configured signed policy cannot be bypassed by a local review request.")
