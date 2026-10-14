@@ -52,10 +52,8 @@ final class ConsoleConnectionModel: NSObject, ASWebAuthenticationPresentationCon
                 callback = try await authenticate(url)
             } else {
                 callback = try await withCheckedThrowingContinuation { continuation in
-                    let authentication = ASWebAuthenticationSession(url: url, callbackURLScheme: "ooo.planisphere.mac") { url, error in
-                        if let url { continuation.resume(returning: url) }
-                        else { continuation.resume(throwing: error ?? ConnectionError.invalidResponse) }
-                    }
+                    let authentication = ASWebAuthenticationSession(url: url, callbackURLScheme: "ooo.planisphere.mac",
+                                                                    completionHandler: Self.completion(continuation))
                     authentication.presentationContextProvider = self
                     authentication.prefersEphemeralWebBrowserSession = false
                     session = authentication
@@ -76,6 +74,15 @@ final class ConsoleConnectionModel: NSObject, ASWebAuthenticationPresentationCon
             message = "Connection cancelled. Your local vaults are ready to use."
         } catch { message = error.localizedDescription }
         session = nil; busy = false
+    }
+
+    // The session can call back off the main thread (seen with a non-Safari default browser).
+    // A closure formed inside this main-actor class would assert main-actor isolation and crash.
+    nonisolated static func completion(_ continuation: CheckedContinuation<URL, Error>) -> @Sendable (URL?, Error?) -> Void {
+        { url, error in
+            if let url { continuation.resume(returning: url) }
+            else { continuation.resume(throwing: error ?? ConnectionError.invalidResponse) }
+        }
     }
 
     func cancel() { session?.cancel() }

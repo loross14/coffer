@@ -87,4 +87,13 @@ final class ConsoleConnectionModelTests: XCTestCase {
         XCTAssertNil(store.value)
         XCTAssertFalse(model.busy)
     }
+
+    func testSignInCallbackOffTheMainThreadReturnsTheURL() async throws {
+        let callback = URL(string: "ooo.planisphere.mac://connected?code=c&state=s")!
+        let received: URL = try await withCheckedThrowingContinuation { continuation in
+            let handler = ConsoleConnectionModel.completion(continuation)
+            DispatchQueue.global().async { handler(callback, nil) }
+        }
+        XCTAssertEqual(received, callback)
+    }
 }
