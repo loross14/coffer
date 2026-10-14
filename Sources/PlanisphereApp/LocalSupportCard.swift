@@ -24,7 +24,7 @@ struct LocalSupportCard: View {
         .sheet(isPresented: $configuring) {
             VStack(alignment: .leading, spacing: 18) {
                 Text("Local support").font(.title2.weight(.semibold))
-                Text("Use a loaded LM Studio model to prepare source selections in the background. Your agent still evaluates the evidence.")
+                Text("Planisphere's own model prepares source selections in the background, on this Mac. Your agent still evaluates the evidence.")
                     .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if let status = model.status {
                     Label(status.enabled
@@ -32,19 +32,7 @@ struct LocalSupportCard: View {
                           : "Support is paused",
                           systemImage: status.enabled ? "checkmark.circle" : "pause.circle")
                         .font(.callout.weight(.medium)).foregroundStyle(PSStyle.accent)
-                    if status.models.isEmpty {
-                        Text("Load a local model in LM Studio, then check again. Remote model instances are not offered here.")
-                        HStack {
-                            Button("Open LM Studio") {
-                                NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/LM Studio.app"))
-                            }
-                            Button("Check again") { Task { await model.refresh() } }
-                        }
-                    } else {
-                        Picker("Model on this Mac", selection: $model.selectedModel) {
-                            ForEach(status.models) { item in Text(item.name).tag(item.id) }
-                        }
-                    }
+                    ModelRuntimeSection(runtime: model.runtime) { await model.refresh() }
                     if status.retrieval_connections == 0 {
                         Text("Connect memory to Codex first. No existing vault is required.")
                             .font(.callout).foregroundStyle(.secondary)

@@ -55,7 +55,7 @@ final class AdapterSandboxModel {
     var arguments = "[]"
     var input = "{\n  \"session_id\": \"sandbox-example\",\n  \"cwd\": \"/sandbox\",\n  \"hook_event_name\": \"UserPromptSubmit\",\n  \"prompt\": \"Hello from the adapter sandbox\"\n}"
     var host = "codex"
-    var endpoint = "http://127.0.0.1:1234"
+    var endpoint = "http://127.0.0.1:41234"
     var token = ""
     var selectedModel = ""
     var prompt = "Reply with one sentence confirming this test reached you."

@@ -60,9 +60,9 @@ semantic duplicates are not automatically detected.
 
 ## Local support preview
 
-The Memory screen includes a separate Local support setup sheet. It lists loaded
-device-local LM Studio models and offers observation, prepared-evidence use and
-pause. Fresh memory setup is sufficient; no account or existing vault is required.
+The Memory screen includes a separate Local support setup sheet. It installs and
+runs Planisphere's own model and offers observation, prepared-evidence use and
+pause. Nothing besides Planisphere needs to be installed. Fresh memory setup is sufficient; no account or existing vault is required.
 Connecting support upgrades recognized existing agent controllers, preserves
 disabled events and requires normal Codex hook review. Opening Memory reads saved
 support status without waking the model; opening setup checks the local inventory.
@@ -77,8 +77,25 @@ acknowledge host delivery or establish answer quality.
 
 This remains a preview: only synthetic local inference and host journeys have
 been measured. The whole-workflow frontier-token, metered-cost and independent
-quality gates remain unmeasured. LM Studio is an external runtime dependency;
-no model weights are included in this app package. Pause stops new preparation,
+quality gates remain unmeasured.
+
+## Built-in model
+
+Planisphere runs Qwen3 4B Instruct (Q4_K_M GGUF, 2,497,280,448 bytes, SHA-256
+`8cdb57cb…`) with a bundled llama.cpp server (`Integrations/Model/PIN.json`,
+v0.6.0, MIT). The weights are not in the app package: setup downloads them once
+from the pinned Hugging Face revision, or copies an identical file already on this
+Mac, and refuses any file whose size or fingerprint differs. The model and its
+private `runtime.json` live in `Application Support/Planisphere/Models`.
+
+`Contents/Helpers/planisphere-model` runs as the `ooo.planisphere.model`
+background item (Login Items) and starts the server on `127.0.0.1:41234`, so
+connected agents can use it while the app is closed. Before each call the host
+checks that the server reports the recorded file, alias and context, and is idle.
+Build the server with `scripts/build-model-server.sh` and pass it to packaging as
+`PLANISPHERE_MODEL_SERVER`. Before October 14, 2026 this path used LM Studio; the
+held-out reviewer results were unchanged on the built-in runtime
+(`planisphere-api` `7fea1dd7`). Pause stops new preparation,
 prevents stale publication and disconnects any active support request. Transport
 disconnection requests cancellation; it does not independently certify that a
 provider stopped. Interrupted requests without final usage retain unknown usage.

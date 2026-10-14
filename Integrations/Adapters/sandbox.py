@@ -155,7 +155,7 @@ def endpoint(value):
         address = ipaddress.ip_address(url.hostname or "")
         port = url.port
     except ValueError:
-        raise ValueError("Use a literal loopback address, such as http://127.0.0.1:1234.") from None
+        raise ValueError("Use a literal loopback address, such as http://127.0.0.1:41234.") from None
     if not address.is_loopback or url.scheme not in {"http", "https"} or url.username or url.password or url.query or url.fragment or url.path.rstrip("/") not in {"", "/v1"}:
         raise ValueError("Use a loopback HTTP(S) server with no credentials, query, or custom path in its URL.")
     if port is not None and port < 1:

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PlanisphereModel
 
 struct SupportModelChoice: Codable, Identifiable, Sendable {
     let id: String
@@ -17,7 +18,7 @@ struct SupportStatus: Codable, Sendable {
 }
 
 actor LocalSupportService {
-    func request(root: URL, home: URL, mode: String? = nil, model: String = "", inventory: Bool = true) throws -> Data {
+    func request(root: URL, home: URL, runtime: URL, mode: String? = nil, model: String = "", inventory: Bool = true) throws -> Data {
         let bundle = Bundle.main.bundleURL
         let packaged = bundle.pathExtension == "app"
         let checkout = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -29,7 +30,7 @@ actor LocalSupportService {
         }
         let process = Process(), output = Pipe()
         process.executableURL = python
-        process.arguments = ["-B", script.path, "--memory-root", root.path, "--codex-home", home.path]
+        process.arguments = ["-B", script.path, "--memory-root", root.path, "--codex-home", home.path, "--runtime", runtime.path]
         if let mode { process.arguments! += ["--mode", mode, "--model", model] }
         if !inventory && mode == nil { process.arguments?.append("--configuration-only") }
         process.standardInput = FileHandle.nullDevice
@@ -53,12 +54,15 @@ final class LocalSupportModel {
     private(set) var busy = false
     var message: String?
     var selectedModel = ""
+    let runtime: ModelRuntimeModel
     private let service = LocalSupportService()
     private let root: URL
     private let home: URL
 
     init(root: URL) {
         self.root = root
+        // Memory lives in <data directory>/Memory; the model sits beside it in <data directory>/Models.
+        runtime = ModelRuntimeModel(location: .standard(dataDirectory: root.deletingLastPathComponent()))
         home = ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
     }
@@ -66,7 +70,7 @@ final class LocalSupportModel {
     func refresh(inventory: Bool = true) async {
         guard !busy else { return }; busy = true; defer { busy = false }
         do {
-            let value = try JSONDecoder().decode(SupportStatus.self, from: await service.request(root: root, home: home, inventory: inventory))
+            let value = try JSONDecoder().decode(SupportStatus.self, from: await service.request(root: root, home: home, runtime: runtime.location.runtimeRecord, inventory: inventory))
             status = value
             if selectedModel.isEmpty || !value.models.contains(where: { $0.id == selectedModel }) {
                 selectedModel = value.models.contains(where: { $0.id == value.model }) ? value.model : value.models.first?.id ?? ""
@@ -78,7 +82,7 @@ final class LocalSupportModel {
     func configure(_ mode: String) async {
         guard !busy else { return }; busy = true; defer { busy = false }
         do {
-            status = try JSONDecoder().decode(SupportStatus.self, from: await service.request(root: root, home: home, mode: mode, model: selectedModel))
+            status = try JSONDecoder().decode(SupportStatus.self, from: await service.request(root: root, home: home, runtime: runtime.location.runtimeRecord, mode: mode, model: selectedModel))
             message = mode == "off" ? "Support is paused. Active preparation is being stopped; its results will not be used."
                 : "Setup saved. Review the updated hooks in Codex, then start a new chat. Automatic execution has not yet been verified."
         } catch { message = String(describing: error) }

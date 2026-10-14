@@ -8,7 +8,8 @@ let package = Package(
         .library(name: "PlanisphereCore", targets: ["PlanisphereCore"]),
         .library(name: "PlanisphereManaged", targets: ["PlanisphereManaged"]),
         .executable(name: "Planisphere", targets: ["PlanisphereApp"]),
-        .executable(name: "planisphere-memory", targets: ["MemoryCLI"])
+        .executable(name: "planisphere-memory", targets: ["MemoryCLI"]),
+        .executable(name: "planisphere-model", targets: ["ModelLauncher"])
     ],
     dependencies: [.package(url: "https://github.com/migueldeicaza/SwiftTerm.git", exact: "1.20.0")],
     targets: [
@@ -19,12 +20,15 @@ let package = Package(
         .target(name: "PlanisphereMemory", dependencies: ["CSQLite"]),
         .executableTarget(name: "MemoryCLI", dependencies: ["PlanisphereMemory"]),
         .testTarget(name: "PlanisphereMemoryTests", dependencies: ["PlanisphereMemory"]),
+        .target(name: "PlanisphereModel"),
+        .executableTarget(name: "ModelLauncher", dependencies: ["PlanisphereModel"]),
+        .testTarget(name: "PlanisphereModelTests", dependencies: ["PlanisphereModel"]),
         .target(name: "PlanisphereCore"),
         .target(name: "PlanisphereGrapheine"),
         .target(name: "PlanisphereGraph"),
         .target(name: "PlanisphereConnection"),
         .target(name: "PlanisphereManaged", dependencies: ["PlanisphereCore"]),
-        .executableTarget(name: "PlanisphereApp", dependencies: ["PlanisphereCore", "PlanisphereGrapheine", "PlanisphereGraph", "PlanisphereConnection", "PlanisphereMemory", "Sparkle", .product(name: "SwiftTerm", package: "SwiftTerm")],
+        .executableTarget(name: "PlanisphereApp", dependencies: ["PlanisphereCore", "PlanisphereGrapheine", "PlanisphereGraph", "PlanisphereConnection", "PlanisphereMemory", "PlanisphereModel", "Sparkle", .product(name: "SwiftTerm", package: "SwiftTerm")],
                           linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
         .testTarget(name: "PlanisphereConnectionTests", dependencies: ["PlanisphereConnection"]),
         .testTarget(name: "PlanisphereAppTests", dependencies: ["PlanisphereApp", "PlanisphereConnection"]),

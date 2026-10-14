@@ -21,6 +21,7 @@ mkdir -p "$OUTPUT_DIR" "$MODULE_CACHE"
 export CLANG_MODULE_CACHE_PATH="$MODULE_CACHE"
 swift build --disable-sandbox --scratch-path "$BUILD_DIR" -c "$CONFIGURATION" --product Planisphere
 swift build --disable-sandbox --scratch-path "$BUILD_DIR" -c "$CONFIGURATION" --product planisphere-memory
+swift build --disable-sandbox --scratch-path "$BUILD_DIR" -c "$CONFIGURATION" --product planisphere-model
 BINARY_DIR="$(swift build --disable-sandbox --scratch-path "$BUILD_DIR" -c "$CONFIGURATION" --show-bin-path)"
 STAGING_DIR="$(mktemp -d "$OUTPUT_DIR/.package.XXXXXX")"
 trap 'rm -rf "$STAGING_DIR"' EXIT
@@ -31,6 +32,14 @@ mkdir -p "$STAGING_APP/Contents/Resources/Adapters"
 cp Integrations/Adapters/sandbox.py "$STAGING_APP/Contents/Resources/Adapters/sandbox.py"
 cp "$BINARY_DIR/planisphere-memory" "$STAGING_APP/Contents/MacOS/planisphere-memory"
 /usr/bin/python3 scripts/bundle-host.py "${PLANISPHERE_HOST_SOURCE:?Set PLANISPHERE_HOST_SOURCE to the pinned API internal directory}" "$STAGING_APP/Contents/Resources/Host"
+# Planisphere's own model runtime: launcher, pinned llama.cpp server and its background item.
+MODEL_SERVER="${PLANISPHERE_MODEL_SERVER:?Set PLANISPHERE_MODEL_SERVER to a server built by scripts/build-model-server.sh}"
+MODEL_COMMIT=$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"][:7])' Integrations/Model/PIN.json)
+"$MODEL_SERVER" --version 2>&1 | grep -q "commit $MODEL_COMMIT" || { printf 'Model server is not the pinned llama.cpp %s build\n' "$MODEL_COMMIT" >&2; exit 1; }
+mkdir -p "$STAGING_APP/Contents/Helpers" "$STAGING_APP/Contents/Library/LaunchAgents"
+cp "$BINARY_DIR/planisphere-model" "$STAGING_APP/Contents/Helpers/planisphere-model"
+cp "$MODEL_SERVER" "$STAGING_APP/Contents/Helpers/planisphere-model-server"
+cp Resources/LaunchAgents/ooo.planisphere.model.plist "$STAGING_APP/Contents/Library/LaunchAgents/ooo.planisphere.model.plist"
 cp Resources/Info.plist "$STAGING_APP/Contents/Info.plist"
 ditto Resources/ThirdPartyNotices "$STAGING_APP/Contents/Resources/ThirdPartyNotices"
 mkdir -p "$STAGING_APP/Contents/Resources/Grapheine"
