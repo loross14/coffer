@@ -2,6 +2,7 @@ import SwiftUI
 
 struct LocalSupportCard: View {
     @Bindable var model: LocalSupportModel
+    var openLocal: (() -> Void)? = nil
     @State private var configuring = false
 
     var body: some View {
@@ -32,7 +33,17 @@ struct LocalSupportCard: View {
                           : "Support is paused",
                           systemImage: status.enabled ? "checkmark.circle" : "pause.circle")
                         .font(.callout.weight(.medium)).foregroundStyle(PSStyle.accent)
-                    ModelRuntimeSection(runtime: model.runtime) { await model.refresh() }
+                    HStack(spacing: 10) {
+                        Image(systemName: "cpu").foregroundStyle(PSStyle.accent)
+                        Text(model.runtime.phase == .running ? "Uses Planisphere's local model, running on this Mac."
+                             : "Uses Planisphere's local model. Install and start it in Local.")
+                            .font(.callout).fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        if let openLocal {
+                            Button("Open Local") { configuring = false; openLocal() }.buttonStyle(PSButtonStyle())
+                        }
+                    }
+                    .padding(14).background(PSStyle.surface, in: RoundedRectangle(cornerRadius: 10))
                     if status.retrieval_connections == 0 {
                         Text("Connect memory to Codex first. No existing vault is required.")
                             .font(.callout).foregroundStyle(.secondary)
@@ -53,7 +64,7 @@ struct LocalSupportCard: View {
                 Text("Connection updates preserve disabled hooks and require Codex’s normal review. No frontier API calls are made by this support worker.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 HStack { Spacer(); Button("Done") { configuring = false }.keyboardShortcut(.defaultAction) }
-            }.padding(28).frame(width: 570).task { await model.refresh() }
+            }.padding(28).frame(width: 570).task { await model.runtime.refresh(); await model.refresh() }
         }
     }
 }

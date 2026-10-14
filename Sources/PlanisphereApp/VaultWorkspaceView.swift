@@ -19,7 +19,10 @@ struct VaultWorkspaceView: View {
                 }
                 Group {
                     if model.activitySurface == .memory {
-                        MemoryWorkspaceView(model: model.memory)
+                        MemoryWorkspaceView(model: model.memory, openLocal: { model.activitySurface = .local })
+                    } else if model.activitySurface == .local {
+                        LocalModelsView(runtime: model.memory.support.runtime, support: model.memory.support,
+                                        open: { model.activitySurface = $0 })
                     } else if model.activitySurface == .terminal {
                         TerminalWorkspaceView(store: TerminalWorkspaceModel.shared, initialDirectory: model.selectedVault.map { URL(fileURLWithPath: $0.path) })
                     } else if model.activitySurface == .adapters {

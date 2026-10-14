@@ -67,8 +67,13 @@ final class LocalSupportModel {
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
     }
 
+    private(set) var previewing = false
+    #if DEBUG
+    func preview(_ status: SupportStatus) { previewing = true; self.status = status }
+    #endif
+
     func refresh(inventory: Bool = true) async {
-        guard !busy else { return }; busy = true; defer { busy = false }
+        guard !busy, !previewing else { return }; busy = true; defer { busy = false }
         do {
             let value = try JSONDecoder().decode(SupportStatus.self, from: await service.request(root: root, home: home, runtime: runtime.location.runtimeRecord, inventory: inventory))
             status = value

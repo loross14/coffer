@@ -12,23 +12,109 @@ final class ModelRuntimeModel {
         case checking, notInstalled, installing(String, Double?), installed, starting, running, failed(String)
     }
 
+    struct Reply: Equatable {
+        let text: String
+        let seconds: Double
+        let tokens: Int?
+    }
+
     let spec = ModelSpec.builtIn
     let location: ModelLocation
     private(set) var phase: Phase = .checking
     private(set) var record: RuntimeRecord?
     private(set) var existingCopy: URL?
     private(set) var needsApproval = false
+    private(set) var lastReply: Reply?
+    private(set) var asking = false
+    private(set) var askError: String?
+    /// Agent hook configurations (Codex, Claude Code) whose settings point at this model.
+    private(set) var agentHooks = 0
     private var work: Task<Void, Never>?
     private let service = SMAppService.agent(plistName: "ooo.planisphere.model.plist")
+    private let home: URL
 
-    init(location: ModelLocation) { self.location = location }
+    init(location: ModelLocation, home: URL = FileManager.default.homeDirectoryForCurrentUser) {
+        self.location = location
+        self.home = home
+    }
 
     var busy: Bool {
         switch phase { case .installing, .starting, .checking: true; default: false }
     }
 
+    /// Fixed states for rendering review screenshots; live refreshes stop once set.
+    private(set) var previewing = false
+    #if DEBUG
+    func preview(_ phase: Phase, record: RuntimeRecord?, existingCopy: URL? = nil, reply: Reply? = nil, agentHooks: Int = 0) {
+        previewing = true
+        self.phase = phase; self.record = record; self.existingCopy = existingCopy
+        lastReply = reply; self.agentHooks = agentHooks
+    }
+    #endif
+
+    var fingerprint: String { "\(spec.sha256.prefix(8))…\(spec.sha256.suffix(4))" }
+
+    /// One stateless question to the running model, timed end to end.
+    func ask(_ prompt: String) async {
+        let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !asking, phase == .running, let record,
+              let url = URL(string: record.endpoint + "/v1/chat/completions") else { return }
+        asking = true; askError = nil
+        defer { asking = false }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 60)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "model": record.identifier, "temperature": 0.3, "max_tokens": 300, "stream": false,
+            "messages": [["role": "user", "content": text]]])
+        let started = Date()
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  let body = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let message = ((body["choices"] as? [[String: Any]])?.first?["message"] as? [String: Any])?["content"] as? String
+            else { throw URLError(.badServerResponse) }
+            let tokens = (body["usage"] as? [String: Any])?["completion_tokens"] as? Int
+            lastReply = Reply(text: message.trimmingCharacters(in: .whitespacesAndNewlines),
+                              seconds: Date().timeIntervalSince(started), tokens: tokens)
+        } catch {
+            askError = "The model didn't answer. Check that it's running, then try again."
+        }
+    }
+
+    /// Counts hook settings that reach this model, directly or through Memory's local support setting.
+    func scanAgentHooks() async {
+        guard !previewing else { return }
+        let home = home, needles = [location.runtimeRecord.path, spec.endpoint]
+        agentHooks = await Task.detached { Self.hookSettingsUsingModel(home: home, needles: needles) }.value
+    }
+
+    nonisolated static func hookSettingsUsingModel(home: URL, needles: [String]) -> Int {
+        func small(_ url: URL) -> String? {
+            guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size < 262_144 else { return nil }
+            return try? String(contentsOf: url, encoding: .utf8)
+        }
+        func mentions(_ text: String) -> Bool { needles.contains { text.contains($0) } }
+        var settings = Set<String>()
+        for file in [home.appendingPathComponent(".codex/hooks.json"), home.appendingPathComponent(".claude/settings.json")] {
+            guard let text = small(file) else { continue }
+            let words = text.replacingOccurrences(of: "\\\"", with: " ").split(whereSeparator: { " \"'".contains($0) })
+            for (index, word) in words.enumerated() where word == "--settings" && index + 1 < words.count {
+                settings.insert(String(words[index + 1]))
+            }
+        }
+        return settings.filter { path in
+            guard let text = small(URL(fileURLWithPath: path)) else { return false }
+            if mentions(text) { return true }
+            guard let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
+                  let linked = object["local_support_connection"] as? String,
+                  let connection = small(URL(fileURLWithPath: linked)) else { return false }
+            return mentions(connection)
+        }.count
+    }
+
     func refresh() async {
-        guard work == nil else { return }
+        guard work == nil, !previewing else { return }
         let location = location, spec = spec
         record = await Task.detached { ModelStore.installed(spec: spec, at: location) }.value
         existingCopy = record == nil ? ModelStore.existingCopies(spec: spec).first : nil
@@ -45,10 +131,10 @@ final class ModelRuntimeModel {
     }
 
     func download() {
-        install(label: "Downloading \(Self.size(spec.sizeBytes))…") { [weak self] location, spec, progress in
+        install(label: "Downloading…") { [weak self] location, spec, progress in
             let file = try await ModelDownload.fetch(spec.source, into: location) { fraction in
                 progress(fraction)
-                Task { @MainActor in self?.phase = .installing("Downloading \(Self.size(spec.sizeBytes))…", fraction) }
+                Task { @MainActor in self?.phase = .installing("Downloading…", fraction) }
             }
             await MainActor.run { self?.phase = .installing("Checking the download…", nil) }
             return try ModelStore.install(from: file, move: true, spec: spec, at: location) { _ in }

@@ -3,12 +3,13 @@ import Observation
 import PlanisphereConnection
 
 enum ActivitySurface: String, CaseIterable {
-    case prompts = "Prompts", hooks = "Hooks", memory = "Memory", terminal = "Terminal", adapters = "Adapters"
+    case prompts = "Prompts", hooks = "Hooks", memory = "Memory", local = "Local", terminal = "Terminal", adapters = "Adapters"
     var symbol: String {
         switch self {
         case .prompts: "text.bubble"
         case .hooks: "point.3.connected.trianglepath.dotted"
         case .memory: "sparkles.rectangle.stack"
+        case .local: "cpu"
         case .terminal: "terminal"
         case .adapters: "puzzlepiece.extension"
         }
