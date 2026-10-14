@@ -41,6 +41,7 @@ final class ConsoleConnectionModelTests: XCTestCase {
         XCTAssertEqual(store.value?.token, saved.token)
     }
 
+
     func testReconnectRetainsCredentialWhenRevocationFails() async throws {
         let saved = try credential()
         let store = MemoryCredentials(saved)
@@ -49,7 +50,7 @@ final class ConsoleConnectionModelTests: XCTestCase {
             (Data(), HTTPURLResponse(url: request.url!, statusCode: request.httpMethod == "DELETE" ? 503 : 401,
                                      httpVersion: nil, headerFields: nil)!)
         }
-        let model = ConsoleConnectionModel(client: client, keychain: store, authenticate: { _ in
+        let model = ConsoleConnectionModel(client: client, keychain: store, findBrowsers: { Self.browsers }, open: { _, _ in
             browserOpened = true
             throw ConnectionError.unavailable
         })
@@ -65,20 +66,11 @@ final class ConsoleConnectionModelTests: XCTestCase {
     func testReconnectRevokesOldCredentialBeforeOpeningSignIn() async throws {
         let store = MemoryCredentials(try credential())
         var browserOpened = false
-        let client = ConsoleClient { request in
-            let status: Int
-            let body: Data
-            if request.httpMethod == "DELETE" {
-                status = 200; body = Data(#"{"disconnected":true}"#.utf8)
-            } else if request.url!.path.hasSuffix("/begin") {
-                status = 200; body = Data((#"{"authorization_path":"/console#mac-connect/"# + String(repeating: "r", count: 43) + #""}"#).utf8)
-            } else { status = 401; body = Data() }
-            return (body, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
-        }
-        let model = ConsoleConnectionModel(client: client, keychain: store, authenticate: { _ in
+        let model = ConsoleConnectionModel(client: signInClient(saved: nil, revoke: true), keychain: store,
+                                           findBrowsers: { Self.browsers }, open: { _, _ in
             XCTAssertNil(store.value)
             browserOpened = true
-            throw ConnectionError.unavailable
+            throw ConnectionSignInError.browserUnavailable("Arc")
         })
         await model.load()
         await model.reconnect()
@@ -86,59 +78,106 @@ final class ConsoleConnectionModelTests: XCTestCase {
         XCTAssertNil(model.credential)
         XCTAssertNil(store.value)
         XCTAssertFalse(model.busy)
+        XCTAssertEqual(model.message, ConnectionSignInError.browserUnavailable("Arc").localizedDescription)
     }
 
-    func testSignInCallbackOffTheMainThreadReturnsTheURL() async throws {
-        let callback = URL(string: "ooo.planisphere.mac://connected?code=c&state=s")!
-        let received: URL = try await withCheckedThrowingContinuation { continuation in
-            let handler = ConsoleConnectionModel.completion(CallbackHandoff(continuation))
-            DispatchQueue.global().async { handler(callback, nil) }
-        }
-        XCTAssertEqual(received, callback)
-    }
-
-    func testHandoffFinishesOnceWhenBothReturnPathsArrive() async throws {
-        let callback = URL(string: "ooo.planisphere.mac:/console-connected")!
-        let received: URL = try await withCheckedThrowingContinuation { continuation in
-            let handoff = CallbackHandoff(continuation)
-            handoff.finish(.success(callback))
-            ConsoleConnectionModel.completion(handoff)(nil, URLError(.cancelled))
-        }
-        XCTAssertEqual(received, callback)
-    }
-
-    func testReturnLinkOpenedByTheBrowserCompletesSignIn() async throws {
+    func testReturnLinkFromTheChosenBrowserCompletesSignIn() async throws {
         let store = MemoryCredentials(nil)
         let saved = try credential()
-        let state = LockedValue<String?>(nil)
-        let client = ConsoleClient { request in
-            let path = request.url!.path
-            var body = Data()
-            if path.hasSuffix("/begin") {
-                let sent = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
-                state.set(sent["state"] as? String)
-                body = Data((#"{"authorization_path":"/console#mac-connect/"# + String(repeating: "r", count: 43) + #""}"#).utf8)
-            } else if path.hasSuffix("/exchange") {
-                body = try JSONEncoder().encode(saved)
-            }
-            return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-        }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString))
+        defaults.set("com.apple.Safari", forKey: ConsoleConnectionModel.browserPreferenceKey)
         var model: ConsoleConnectionModel!
-        let code = String(repeating: "c", count: 43)
-        model = ConsoleConnectionModel(client: client, keychain: store, authenticate: { _ in
-            // The browser never completes the session; the return link arrives as an opened URL instead.
-            let wrong = URL(string: "ooo.planisphere.mac:/console-connected?code=\(code)&state=wrong")!
-            XCTAssertFalse(model.receiveCallback(wrong))
-            let link = URL(string: "ooo.planisphere.mac:/console-connected?code=\(code)&state=\(state.get()!)")!
-            XCTAssertTrue(model.receiveCallback(link))
-            // A late session failure must not undo the completed sign-in.
-            throw ConnectionError.unavailable
+        model = ConsoleConnectionModel(client: signInClient(saved: saved), keychain: store, defaults: defaults,
+                                       findBrowsers: { Self.browsers }, open: { url, browser in
+            XCTAssertEqual(url.absoluteString, "https://api.planisphere.ooo/console#mac-connect/" + String(repeating: "r", count: 43))
+            XCTAssertEqual(browser?.id, "com.apple.Safari")
+            XCTAssertTrue(model.canCancelSignIn)
+            XCTAssertFalse(model.receiveCallback(self.returnLink(state: "wrong")))
+            XCTAssertTrue(model.receiveCallback(self.returnLink(state: self.state.get()!)))
         })
         await model.connect()
         XCTAssertEqual(model.credential?.token, saved.token)
         XCTAssertEqual(store.value?.token, saved.token)
         XCTAssertFalse(model.busy)
-        XCTAssertFalse(model.receiveCallback(URL(string: "ooo.planisphere.mac:/console-connected?code=\(code)&state=\(state.get()!)")!))
+        XCTAssertFalse(model.canCancelSignIn)
+        XCTAssertFalse(model.receiveCallback(returnLink(state: state.get()!)))
+    }
+
+    func testCancelStopsWaitingForTheBrowser() async throws {
+        var model: ConsoleConnectionModel!
+        model = ConsoleConnectionModel(client: signInClient(saved: nil), keychain: MemoryCredentials(nil),
+                                       findBrowsers: { Self.browsers }, open: { _, _ in model.cancel() })
+        await model.connect()
+        XCTAssertNil(model.credential)
+        XCTAssertFalse(model.busy)
+        XCTAssertFalse(model.canCancelSignIn)
+        XCTAssertEqual(model.message, ConnectionSignInError.cancelled.localizedDescription)
+        XCTAssertFalse(model.receiveCallback(returnLink(state: state.get()!)))
+    }
+
+    func testSignInExpiresWhenTheBrowserNeverReturns() async throws {
+        let model = ConsoleConnectionModel(client: signInClient(saved: nil), keychain: MemoryCredentials(nil),
+                                           findBrowsers: { Self.browsers }, open: { _, _ in }, signInTimeout: .milliseconds(50))
+        await model.connect()
+        XCTAssertNil(model.credential)
+        XCTAssertFalse(model.busy)
+        XCTAssertEqual(model.message, ConnectionSignInError.expired.localizedDescription)
+    }
+
+    func testBrowserChoiceIsRememberedAndFallsBackToTheDefault() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString))
+        let first = ConsoleConnectionModel(defaults: defaults, findBrowsers: { Self.browsers })
+        first.refreshBrowsers()
+        XCTAssertEqual(first.browser?.id, "company.thebrowser.Browser")
+        first.chosenBrowserID = "com.apple.Safari"
+        let second = ConsoleConnectionModel(defaults: defaults, findBrowsers: { Self.browsers })
+        second.refreshBrowsers()
+        XCTAssertEqual(second.browser?.id, "com.apple.Safari")
+        let removed = ConsoleConnectionModel(defaults: defaults, findBrowsers: { Array(Self.browsers.prefix(1)) })
+        removed.refreshBrowsers()
+        XCTAssertEqual(removed.browser?.id, "company.thebrowser.Browser")
+    }
+
+    func testHandoffFinishesOnceFromAnyThread() async throws {
+        let link = URL(string: "ooo.planisphere.mac:/console-connected")!
+        let received: URL = try await withCheckedThrowingContinuation { continuation in
+            let handoff = CallbackHandoff(continuation)
+            DispatchQueue.global().async {
+                handoff.finish(.success(link))
+                handoff.finish(.failure(ConnectionSignInError.expired))
+            }
+        }
+        XCTAssertEqual(received, link)
+    }
+
+    private static let browsers = [
+        SignInBrowser(id: "company.thebrowser.Browser", name: "Arc", url: URL(fileURLWithPath: "/Applications/Arc.app"), isDefault: true),
+        SignInBrowser(id: "com.apple.Safari", name: "Safari", url: URL(fileURLWithPath: "/Applications/Safari.app"), isDefault: false),
+    ]
+    private let state = LockedValue<String?>(nil)
+
+    private func returnLink(state: String) -> URL {
+        URL(string: "ooo.planisphere.mac:/console-connected?code=\(String(repeating: "c", count: 43))&state=\(state)")!
+    }
+
+    private func signInClient(saved: ConnectionCredential?, revoke: Bool = false) -> ConsoleClient {
+        let state = state
+        return ConsoleClient { request in
+            let path = request.url!.path
+            if revoke, request.httpMethod == "DELETE" {
+                return (Data(#"{"disconnected":true}"#.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+            if path.hasSuffix("/begin") {
+                let sent = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+                state.set(sent["state"] as? String)
+                let body = Data((#"{"authorization_path":"/console#mac-connect/"# + String(repeating: "r", count: 43) + #""}"#).utf8)
+                return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+            if path.hasSuffix("/exchange"), let saved {
+                return (try JSONEncoder().encode(saved), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+            return (Data(), HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!)
+        }
     }
 }
 

@@ -1,9 +1,17 @@
 # Console connection candidate (0.7.0, build 9)
 
 Use **Connect to Console** at the bottom of the sidebar, or **Workspace → Console
-Connection**. The app opens the console through macOS's browser authentication
-session. Sign in, explicitly choose a workspace and approve the connection, then
-return to the app. Local vault work continues to require no account.
+Connection**. Choose a browser under **Sign in with**; the system default is
+preselected and the choice is remembered. The app opens the console there. Sign in,
+explicitly choose a workspace and approve the connection, then choose **Return to
+Planisphere**. The browser opens the fixed `ooo.planisphere.mac:/console-connected`
+link, and the app accepts it only for the pending attempt's state. The app stops
+waiting after the server's 20-minute request lifetime, or on **Cancel Sign-in**.
+Local vault work continues to require no account.
+
+0.9.1 replaced macOS's browser authentication session with this explicit choice.
+In acceptance on October 13, 2026, that session crashed when its callback arrived
+off the main thread, and with Arc it never received the return link at all.
 
 This first step connects an account only. It does not sync vault files,
 checkpoints, policy revisions or reviews. The screen reports that limit explicitly.

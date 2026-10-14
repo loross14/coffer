@@ -1,38 +1,54 @@
 import AppKit
-import AuthenticationServices
 import Observation
 import PlanisphereConnection
 
 @MainActor @Observable
-final class ConsoleConnectionModel: NSObject, ASWebAuthenticationPresentationContextProviding {
+final class ConsoleConnectionModel {
     // Enable only after the matching server routes have been deployed and verified.
     static var isAvailable: Bool {
         Bundle.main.object(forInfoDictionaryKey: "PlanisphereConsoleConnectionEnabled") as? Bool == true
     }
     static let consoleURL = ConsoleClient.production.appendingPathComponent("console")
+    static let browserPreferenceKey = "ConsoleSignInBrowser"
     var presented = false
     private(set) var credential: ConnectionCredential?
     private(set) var busy = false
     private(set) var verified = false
     private(set) var needsSignIn = false
     private(set) var message: String?
+    private(set) var browsers: [SignInBrowser] = []
+    var chosenBrowserID: String? { didSet { defaults.set(chosenBrowserID, forKey: Self.browserPreferenceKey) } }
     private var loaded = false
-    private var session: ASWebAuthenticationSession?
     private var pending: (handoff: CallbackHandoff, attempt: ConnectionAttempt)?
+    private var expiry: Task<Void, Never>?
     private let client: ConsoleClient
     private let keychain: any ConnectionCredentialStoring
-    private let authenticate: (@MainActor (URL) async throws -> URL)?
+    private let defaults: UserDefaults
+    private let findBrowsers: @MainActor () -> [SignInBrowser]
+    private let open: @MainActor (URL, SignInBrowser?) async throws -> Void
+    private let signInTimeout: Duration
 
+    // The server keeps a sign-in request for 20 minutes.
     init(client: ConsoleClient = ConsoleClient(), keychain: any ConnectionCredentialStoring = ConnectionKeychain(),
-         authenticate: (@MainActor (URL) async throws -> URL)? = nil) {
+         defaults: UserDefaults = .standard,
+         findBrowsers: @escaping @MainActor () -> [SignInBrowser] = { SignInBrowser.installed() },
+         open: @escaping @MainActor (URL, SignInBrowser?) async throws -> Void = { try await SignInBrowser.open($0, in: $1) },
+         signInTimeout: Duration = .seconds(20 * 60)) {
         self.client = client
         self.keychain = keychain
-        self.authenticate = authenticate
-        super.init()
+        self.defaults = defaults
+        self.findBrowsers = findBrowsers
+        self.open = open
+        self.signInTimeout = signInTimeout
+        chosenBrowserID = defaults.string(forKey: Self.browserPreferenceKey)
     }
 
     var title: String { credential?.connection.workspace.name ?? "Connect to Console" }
-    var canCancelSignIn: Bool { session != nil }
+    var canCancelSignIn: Bool { pending != nil }
+    // The chosen browser, or the system default when none was chosen or it is no longer installed.
+    var browser: SignInBrowser? { browsers.first { $0.id == chosenBrowserID } ?? browsers.first }
+
+    func refreshBrowsers() { browsers = findBrowsers() }
 
     func load() async {
         guard !loaded else { return }
@@ -48,24 +64,17 @@ final class ConsoleConnectionModel: NSObject, ASWebAuthenticationPresentationCon
         do {
             let attempt = try ConnectionAttempt()
             let url = try await client.begin(attempt)
+            if browsers.isEmpty { refreshBrowsers() }
+            let browser = browser
             let callback: URL = try await withCheckedThrowingContinuation { continuation in
                 let handoff = CallbackHandoff(continuation)
                 pending = (handoff, attempt)
-                if let authenticate {
-                    Task { @MainActor in
-                        do { handoff.finish(.success(try await authenticate(url))) }
-                        catch { handoff.finish(.failure(error)) }
-                    }
-                    return
+                expiry = Task { [signInTimeout] in
+                    try? await Task.sleep(for: signInTimeout)
+                    if !Task.isCancelled { handoff.finish(.failure(ConnectionSignInError.expired)) }
                 }
-                let authentication = ASWebAuthenticationSession(url: url, callbackURLScheme: "ooo.planisphere.mac",
-                                                                completionHandler: Self.completion(handoff))
-                authentication.presentationContextProvider = self
-                authentication.prefersEphemeralWebBrowserSession = false
-                session = authentication
-                if !authentication.start() {
-                    session = nil
-                    handoff.finish(.failure(ConnectionError.unavailable))
+                Task {
+                    do { try await open(url, browser) } catch { handoff.finish(.failure(error)) }
                 }
             }
             pending = nil
@@ -76,29 +85,20 @@ final class ConsoleConnectionModel: NSObject, ASWebAuthenticationPresentationCon
             credential = saved; verified = true; needsSignIn = false
             try keychain.save(saved)
             message = "Connected. Your vaults and history stay on this Mac."
-        } catch let error as ASWebAuthenticationSessionError where error.code == .canceledLogin {
-            message = "Connection cancelled. Your local vaults are ready to use."
         } catch { message = error.localizedDescription }
-        session = nil; pending = nil; busy = false
+        expiry?.cancel(); expiry = nil; pending = nil; busy = false
     }
 
-    // The session can call back off the main thread (seen with a non-Safari default browser).
-    // A closure formed inside this main-actor class would assert main-actor isolation and crash.
-    nonisolated static func completion(_ handoff: CallbackHandoff) -> @Sendable (URL?, Error?) -> Void {
-        { url, error in handoff.finish(url.map { .success($0) } ?? .failure(error ?? ConnectionError.invalidResponse)) }
-    }
-
-    // Some default browsers (Arc) open the return link as an ordinary link instead of completing
-    // the authentication session, so it arrives through onOpenURL. Accept it only for the
-    // pending attempt's state; the exchange still requires that attempt's PKCE verifier.
+    // The console returns through the ooo.planisphere.mac:/console-connected link, which the browser
+    // opens and the app receives through onOpenURL. Accept it only for the pending attempt's state;
+    // the exchange still requires that attempt's PKCE verifier.
     func receiveCallback(_ url: URL) -> Bool {
         guard let pending, (try? pending.attempt.code(from: url)) != nil else { return false }
         pending.handoff.finish(.success(url))
-        session?.cancel()
         return true
     }
 
-    func cancel() { session?.cancel() }
+    func cancel() { pending?.handoff.finish(.failure(ConnectionSignInError.cancelled)) }
 
     func refresh() async {
         guard !busy, var value = credential else { return }
@@ -145,13 +145,9 @@ final class ConsoleConnectionModel: NSObject, ASWebAuthenticationPresentationCon
         guard credential == nil else { return }
         await connect()
     }
-
-    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        NSApp.keyWindow ?? NSApp.windows.first ?? ASPresentationAnchor()
-    }
 }
 
-// Finishes a sign-in exactly once, whichever return path arrives first.
+// Finishes a sign-in exactly once: the return link, Cancel or the expiry, whichever comes first.
 final class CallbackHandoff: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<URL, Error>?

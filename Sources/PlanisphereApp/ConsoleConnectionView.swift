@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import PlanisphereConnection
 
@@ -32,7 +33,19 @@ struct ConsoleConnectionView: View {
                 Text(message).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                     .accessibilityIdentifier("console-connection-message")
             }
-            if connection.busy { ProgressView("Working…").controlSize(.small) }
+            if connection.credential == nil || connection.needsSignIn, !connection.browsers.isEmpty {
+                Picker("Sign in with", selection: Binding(get: { connection.browser?.id ?? "" }, set: { connection.chosenBrowserID = $0 })) {
+                    ForEach(connection.browsers) { browser in
+                        Label { Text(browser.isDefault ? "\(browser.name) (default)" : browser.name) } icon: { Image(nsImage: Self.icon(browser)) }
+                            .tag(browser.id)
+                    }
+                }
+                .frame(maxWidth: 320).disabled(connection.busy)
+                .accessibilityIdentifier("console-sign-in-browser")
+            }
+            if connection.canCancelSignIn {
+                ProgressView("Approve in \(connection.browser?.name ?? "your browser"), then choose Return to Planisphere.").controlSize(.small)
+            } else if connection.busy { ProgressView("Working…").controlSize(.small) }
             VStack(alignment: .leading, spacing: 12) {
               HStack(spacing: 12) {
                 if connection.credential == nil {
@@ -64,12 +77,18 @@ struct ConsoleConnectionView: View {
         }
         .padding(28).frame(width: 660).background(PSStyle.canvas)
         .interactiveDismissDisabled(connection.busy)
-        .task { await connection.load() }
+        .task { connection.refreshBrowsers(); await connection.load() }
         .confirmationDialog("Switch workspace?", isPresented: $confirmSwitch) {
             Button("Disconnect and Choose Workspace") { Task { await connection.switchWorkspace() } }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The current connection will be disconnected before you choose a workspace in the browser. Local vaults and history stay on this Mac.")
         }
+    }
+
+    private static func icon(_ browser: SignInBrowser) -> NSImage {
+        let image = NSWorkspace.shared.icon(forFile: browser.url.path)
+        image.size = NSSize(width: 16, height: 16)
+        return image
     }
 }
