@@ -25,9 +25,9 @@ import types
 import unicodedata
 
 sys.dont_write_bytecode = True
-ENGINE_COMMIT = "cc0d28914306140c593351636401884ea5e4f1c9"
+ENGINE_COMMIT = "0c96ff9d4c9fbce0a275268d88299143d56292d4"
 ENGINE_HASHES = {
-    "grapheine.py": "201d2207a4b0caad5a53818c36e874c8ad5e5e6d5aa54370c1be1ee3721b8451",
+    "grapheine.py": "e7869174237f4aad02b0f4b1af40c46cc9f7a268f9cf8223decd23fb5743ec93",
     "grapheine_authority.py": "cc531bd2abc8c9a8e3174ed180aeb1269497d118366bb7985c51d6c866b097a4",
 }
 MAX_JSON_BYTES = 32 * 1024 * 1024

@@ -45,7 +45,7 @@ This separate signed contract requires a clean Git vault. No remote or GitHub st
 
 ## Engine and runtime
 
-Bundled engine: Grapheine `cc0d28914306140c593351636401884ea5e4f1c9` (0.29.0: one link rule, `graph measure`), with both Python modules checked against fixed SHA-256 values by packaging and the bridge. The bundle includes its MIT license and authority contract. Source is copied from the local reviewed checkout during packaging; there is no runtime download or update.
+Bundled engine: Grapheine `0c96ff9d4c9fbce0a275268d88299143d56292d4` (one link rule, `graph measure`; version stays 0.28.0 until the engine release), with both Python modules checked against fixed SHA-256 values by packaging and the bridge. The bundle includes its MIT license and authority contract. Source is copied from the local reviewed checkout during packaging; there is no runtime download or update.
 
 Python 3.9+ is currently an external dependency. The default interpreter is `/usr/bin/python3`; development can select an absolute executable with `PLANISPHERE_PYTHON`. Signed authority verification requires `cryptography`; write operations also require local Git. The app surfaces missing dependencies instead of returning a successful empty scan. A bundled standalone runtime and clean-machine acceptance are prerequisites for public distribution of pruning.
 
