@@ -46,7 +46,7 @@ final class ModelRuntimeModel {
 
     func download() {
         install(label: "Downloading \(Self.size(spec.sizeBytes))…") { [weak self] location, spec, progress in
-            let file = try await Self.fetch(spec.source, into: location) { fraction in
+            let file = try await ModelDownload.fetch(spec.source, into: location) { fraction in
                 progress(fraction)
                 Task { @MainActor in self?.phase = .installing("Downloading \(Self.size(spec.sizeBytes))…", fraction) }
             }
@@ -132,33 +132,4 @@ final class ModelRuntimeModel {
     nonisolated static func size(_ bytes: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
-
-    /// Downloads into the model folder so the verified file can be moved, not copied, into place.
-    nonisolated static func fetch(_ source: URL, into location: ModelLocation, progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
-        try FileManager.default.createDirectory(at: location.directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let delegate = DownloadProgress(progress)
-        let (temporary, response) = try await URLSession.shared.download(from: source, delegate: delegate)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            try? FileManager.default.removeItem(at: temporary)
-            throw URLError(.badServerResponse)
-        }
-        let file = location.directory.appendingPathComponent(".download-\(UUID().uuidString).gguf")
-        try FileManager.default.moveItem(at: temporary, to: file)
-        return file
-    }
-}
-
-private final class DownloadProgress: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
-    private let report: @Sendable (Double) -> Void
-    private var last = 0.0
-    init(_ report: @escaping @Sendable (Double) -> Void) { self.report = report }
-
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
-                    totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        guard totalBytesExpectedToWrite > 0 else { return }
-        let fraction = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
-        if fraction - last >= 0.005 || fraction >= 1 { last = fraction; report(fraction) }
-    }
-
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {}
 }
