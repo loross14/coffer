@@ -18,6 +18,7 @@ final class ConsoleConnectionModel: NSObject, ASWebAuthenticationPresentationCon
     private(set) var message: String?
     private var loaded = false
     private var session: ASWebAuthenticationSession?
+    private var pending: (handoff: CallbackHandoff, attempt: ConnectionAttempt)?
     private let client: ConsoleClient
     private let keychain: any ConnectionCredentialStoring
     private let authenticate: (@MainActor (URL) async throws -> URL)?
@@ -47,22 +48,27 @@ final class ConsoleConnectionModel: NSObject, ASWebAuthenticationPresentationCon
         do {
             let attempt = try ConnectionAttempt()
             let url = try await client.begin(attempt)
-            let callback: URL
-            if let authenticate {
-                callback = try await authenticate(url)
-            } else {
-                callback = try await withCheckedThrowingContinuation { continuation in
-                    let authentication = ASWebAuthenticationSession(url: url, callbackURLScheme: "ooo.planisphere.mac",
-                                                                    completionHandler: Self.completion(continuation))
-                    authentication.presentationContextProvider = self
-                    authentication.prefersEphemeralWebBrowserSession = false
-                    session = authentication
-                    if !authentication.start() {
-                        session = nil
-                        continuation.resume(throwing: ConnectionError.unavailable)
+            let callback: URL = try await withCheckedThrowingContinuation { continuation in
+                let handoff = CallbackHandoff(continuation)
+                pending = (handoff, attempt)
+                if let authenticate {
+                    Task { @MainActor in
+                        do { handoff.finish(.success(try await authenticate(url))) }
+                        catch { handoff.finish(.failure(error)) }
                     }
+                    return
+                }
+                let authentication = ASWebAuthenticationSession(url: url, callbackURLScheme: "ooo.planisphere.mac",
+                                                                completionHandler: Self.completion(handoff))
+                authentication.presentationContextProvider = self
+                authentication.prefersEphemeralWebBrowserSession = false
+                session = authentication
+                if !authentication.start() {
+                    session = nil
+                    handoff.finish(.failure(ConnectionError.unavailable))
                 }
             }
+            pending = nil
             let code = try attempt.code(from: callback)
             let saved = try await client.exchange(code, attempt: attempt)
             // Keep a returned credential in memory even if Keychain refuses the save,
@@ -73,16 +79,23 @@ final class ConsoleConnectionModel: NSObject, ASWebAuthenticationPresentationCon
         } catch let error as ASWebAuthenticationSessionError where error.code == .canceledLogin {
             message = "Connection cancelled. Your local vaults are ready to use."
         } catch { message = error.localizedDescription }
-        session = nil; busy = false
+        session = nil; pending = nil; busy = false
     }
 
     // The session can call back off the main thread (seen with a non-Safari default browser).
     // A closure formed inside this main-actor class would assert main-actor isolation and crash.
-    nonisolated static func completion(_ continuation: CheckedContinuation<URL, Error>) -> @Sendable (URL?, Error?) -> Void {
-        { url, error in
-            if let url { continuation.resume(returning: url) }
-            else { continuation.resume(throwing: error ?? ConnectionError.invalidResponse) }
-        }
+    nonisolated static func completion(_ handoff: CallbackHandoff) -> @Sendable (URL?, Error?) -> Void {
+        { url, error in handoff.finish(url.map { .success($0) } ?? .failure(error ?? ConnectionError.invalidResponse)) }
+    }
+
+    // Some default browsers (Arc) open the return link as an ordinary link instead of completing
+    // the authentication session, so it arrives through onOpenURL. Accept it only for the
+    // pending attempt's state; the exchange still requires that attempt's PKCE verifier.
+    func receiveCallback(_ url: URL) -> Bool {
+        guard let pending, (try? pending.attempt.code(from: url)) != nil else { return false }
+        pending.handoff.finish(.success(url))
+        session?.cancel()
+        return true
     }
 
     func cancel() { session?.cancel() }
@@ -135,5 +148,21 @@ final class ConsoleConnectionModel: NSObject, ASWebAuthenticationPresentationCon
 
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         NSApp.keyWindow ?? NSApp.windows.first ?? ASPresentationAnchor()
+    }
+}
+
+// Finishes a sign-in exactly once, whichever return path arrives first.
+final class CallbackHandoff: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<URL, Error>?
+
+    init(_ continuation: CheckedContinuation<URL, Error>) { self.continuation = continuation }
+
+    func finish(_ result: Result<URL, Error>) {
+        lock.lock()
+        let waiting = continuation
+        continuation = nil
+        lock.unlock()
+        waiting?.resume(with: result)
     }
 }

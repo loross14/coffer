@@ -13,6 +13,7 @@ struct PlanisphereApp: App {
                 .frame(minWidth: 1060, minHeight: 660)
                 .task { await model.start() }
                 .onOpenURL { url in
+                    if model.console.receiveCallback(url) { return }
                     guard url.scheme == "ooo.planisphere.mac", url.host == nil, url.query == nil, url.fragment == nil, model.canNavigateWorkspace else { return }
                     if url.path == "/prompts" { model.activitySurface = .prompts }
                     if url.path == "/hooks" { model.activitySurface = .hooks }
