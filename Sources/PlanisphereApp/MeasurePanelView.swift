@@ -32,6 +32,10 @@ struct MeasurePanel: View {
                 headline(m)
                 if let d = m.values.degree { degreeShape(d) }
                 tiles(m)
+                if !m.skipped.isEmpty {
+                    Text("Some readings are skipped above \((m.gate ?? 5_000).formatted()) notes. See All readings.")
+                        .font(.system(size: 10)).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+                }
                 if let hubs = m.values.degree?.top.prefix(4), !hubs.isEmpty {
                     list(title: "Most connected", footnote: nil) {
                         let top = max(1, hubs.first?.degree ?? 1)
@@ -101,12 +105,25 @@ struct MeasurePanel: View {
 
     static func shapeSentence(_ m: GraphMeasurement) -> String {
         var parts: [String] = []
-        if let c = m.values.components { parts.append(c.components == 1 ? "One connected piece" : "\(c.components) separate pieces") }
+        if let c = m.values.components { parts.append(c.components == 1 ? "One connected piece" : "\(c.components.formatted()) separate pieces") }
         if let h = m.values.health {
-            parts.append(h.orphans == 0 ? "no orphans" : "\(h.orphans) orphan\(h.orphans == 1 ? "" : "s")")
-            parts.append(h.unresolved == 0 ? "nothing unresolved" : "\(h.unresolved) unresolved link\(h.unresolved == 1 ? "" : "s")")
+            parts.append(h.orphans == 0 ? "no orphans" : "\(h.orphans.formatted()) orphan\(h.orphans == 1 ? "" : "s")")
+            parts.append(h.unresolved == 0 ? "nothing unresolved" : "\(h.unresolved.formatted()) unresolved link\(h.unresolved == 1 ? "" : "s")")
         }
         return parts.joined(separator: " · ") + "."
+    }
+
+    /// Bins that carry an axis label: all of them up to 12, otherwise about six evenly spaced
+    /// plus the last, so two-digit labels never wrap into digit stacks.
+    static func labeledBins(_ count: Int) -> Set<Int> {
+        guard count > 12 else { return Set(0..<count) }
+        let step = Int((Double(count) / 6).rounded(.up))
+        return Set(stride(from: 0, to: count, by: step)).union([count - 1])
+    }
+
+    /// Ratios keep two significant figures when they are small, so a sparse vault doesn't read 0.000.
+    static func ratio(_ value: Double) -> String {
+        value > 0 && value < 0.001 ? String(format: "%.2g", value) : String(format: "%.3f", value)
     }
 
     static func readingTone(_ reading: String) -> Color {
@@ -129,13 +146,16 @@ struct MeasurePanel: View {
                     .font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
             }
             if !bins.isEmpty {
+                let labeled = MeasurePanel.labeledBins(bins.count)
                 HStack(alignment: .bottom, spacing: 3) {
-                    ForEach(bins, id: \.0) { degree, count in
+                    ForEach(Array(bins.enumerated()), id: \.element.0) { index, bin in
+                        let (degree, count) = bin
                         VStack(spacing: 3) {
                             RoundedRectangle(cornerRadius: 2)
                                 .fill(PSStyle.accent.opacity(0.35 + 0.65 * Double(count) / Double(peak)))
                                 .frame(height: max(3, 34 * CGFloat(count) / CGFloat(peak)))
-                            Text("\(degree)").font(.system(size: 9)).monospacedDigit().foregroundStyle(.tertiary)
+                            Text(labeled.contains(index) ? "\(degree)" : " ").font(.system(size: 9)).monospacedDigit()
+                                .foregroundStyle(.tertiary).lineLimit(1).fixedSize()
                         }.frame(maxWidth: .infinity)
                         .help("\(count) note\(count == 1 ? "" : "s") with \(degree) link\(degree == 1 ? "" : "s")")
                     }
@@ -154,7 +174,8 @@ struct MeasurePanel: View {
         let columns = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
         return LazyVGrid(columns: columns, spacing: 8) {
             if let d = v.density, let density = d.density {
-                tile("Density", value: String(format: "%.3f", density), fill: density, note: "of \(d.max_possible.formatted()) possible")
+                tile("Density", value: MeasurePanel.ratio(density), fill: density,
+                     note: "of \(d.max_possible.formatted(.number.notation(.compactName))) possible")
             }
             if let c = v.clustering {
                 tile("Clustering", value: String(format: "%.3f", c.avg_local_clustering), fill: c.avg_local_clustering, note: "\(v.triangles?.triangles.formatted() ?? "—") triangles")
