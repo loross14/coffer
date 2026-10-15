@@ -118,3 +118,17 @@ The current candidate is locally ad-hoc signed. Public Mac source/version push,
 Developer ID signing, notarization and public download acceptance remain subject
 to the existing release hold and release workflow. This feature needs no API
 database migration and does not change production traffic.
+
+## Vault reader for connected agents (October 15, 2026)
+
+Connect Claude Code or Connect Codex also gives that agent a local vault reader for the
+vaults this app has opened. The installer receives `--registry` (the app's
+`registry.json`, beside the memory folder in Application Support); the host writes
+`Memory/Host/Reader/planisphere-reader` and a `~/.local/bin/planisphere-reader`
+symlink, and the hooks read the routes from the registry and each vault's
+`.planisphere/scope.json` on every prompt, so adding or removing a vault needs no
+reconnect. Check setup shows "Vault reader: N vaults (names) · last read …" under
+each connected agent with the same dot treatment as the hooks, and a red sentence
+when nothing can be read ("Open a vault in Planisphere, then Check setup."). The
+reader needs no console account: reads are local and nothing is reported. Host
+contract: `planisphere_vault_reader.py` and `docs/local-memory.md` in planisphere-api.

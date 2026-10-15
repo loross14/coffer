@@ -19,8 +19,12 @@ enum AgentHost: String, CaseIterable, Identifiable, Sendable {
 }
 
 actor MemoryHostInstaller {
-    static func arguments(script: URL, root: URL, home: URL, host: AgentHost, statusOnly: Bool) -> [String] {
-        ["-B", script.path, "--memory-root", root.path, host.homeFlag, home.path] + (statusOnly ? ["--status"] : [])
+    /// The app's vault registry: the vaults it has opened, which the agent's vault reader may read.
+    static func registry(memoryRoot: URL) -> URL { memoryRoot.deletingLastPathComponent().appendingPathComponent("registry.json") }
+
+    static func arguments(script: URL, root: URL, home: URL, host: AgentHost, statusOnly: Bool, registry: URL? = nil) -> [String] {
+        ["-B", script.path, "--memory-root", root.path, host.homeFlag, home.path]
+            + (registry.map { ["--registry", $0.path] } ?? []) + (statusOnly ? ["--status"] : [])
     }
 
     func connect(root: URL, home: URL, host: AgentHost = .codex, statusOnly: Bool = false,
@@ -30,7 +34,8 @@ actor MemoryHostInstaller {
         return host.installedMessage
     }
 
-    /// Check setup: install state plus the sentence that says what would stop the hooks, and the last hook run.
+    /// Check setup: install state plus the sentence that says what would stop the hooks, the last hook run,
+    /// and the vault reader (which vaults it can read, and what would stop it).
     func status(root: URL, home: URL, host: AgentHost, bundle: URL = Bundle.main.bundleURL) throws -> AgentHostReport {
         AgentHostReport(json: try run(root: root, home: home, host: host, statusOnly: true, bundle: bundle))
     }
@@ -46,7 +51,8 @@ actor MemoryHostInstaller {
         }
         let task = Process(), output = Pipe()
         task.executableURL = python
-        task.arguments = Self.arguments(script: script, root: root, home: home, host: host, statusOnly: statusOnly)
+        task.arguments = Self.arguments(script: script, root: root, home: home, host: host, statusOnly: statusOnly,
+                                        registry: Self.registry(memoryRoot: root))
         task.standardOutput = output; task.standardError = FileHandle.nullDevice
         task.standardInput = FileHandle.nullDevice
         task.environment = ["PATH": "/usr/bin:/bin", "HOME": FileManager.default.homeDirectoryForCurrentUser.path, "PYTHONDONTWRITEBYTECODE": "1"]

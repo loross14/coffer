@@ -730,7 +730,12 @@ final class VaultAppModel {
 
     private func reloadVaults(store: VaultStore, preferred: UUID? = nil) async throws {
         let updated = try await store.vaults(includeArchived: false)
+        let changedList = updated.map(\.id) != vaults.map(\.id)
         vaults = updated
+        // The agents' vault reader reads these vaults; Check setup shows which, so refresh it when the list changes.
+        if changedList, memory.agentStatus.values.contains(where: { $0 == "installed" || $0 == "disabled" }) {
+            Task { await memory.refreshAgents() }
+        }
         let requested = preferred ?? selectedVaultID
         let next = updated.first(where: { $0.id == requested })?.id ?? updated.first?.id
         let changedVault = next != selectedVaultID
