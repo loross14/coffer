@@ -25,6 +25,17 @@ actor MemoryHostInstaller {
 
     func connect(root: URL, home: URL, host: AgentHost = .codex, statusOnly: Bool = false,
                  bundle: URL = Bundle.main.bundleURL) throws -> String {
+        let result = try run(root: root, home: home, host: host, statusOnly: statusOnly, bundle: bundle)
+        if statusOnly { return result["status"] as? String ?? "unknown" }
+        return host.installedMessage
+    }
+
+    /// Check setup: install state plus the sentence that says what would stop the hooks, and the last hook run.
+    func status(root: URL, home: URL, host: AgentHost, bundle: URL = Bundle.main.bundleURL) throws -> AgentHostReport {
+        AgentHostReport(json: try run(root: root, home: home, host: host, statusOnly: true, bundle: bundle))
+    }
+
+    private func run(root: URL, home: URL, host: AgentHost, statusOnly: Bool, bundle: URL) throws -> [String: Any] {
         let packaged = bundle.pathExtension == "app"
         let checkout = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let source = packaged ? bundle.appendingPathComponent("Contents/Resources/Host") : checkout.appendingPathComponent(".build/memory-host")
@@ -44,8 +55,7 @@ actor MemoryHostInstaller {
         task.waitUntilExit()
         guard data.count <= 65_536, let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw MemoryHostError.unavailable }
         guard task.terminationStatus == 0 else { throw MemoryHostError.setup(result["error"] as? String ?? "Setup could not finish.") }
-        if statusOnly { return result["status"] as? String ?? "unknown" }
-        return host.installedMessage
+        return result
     }
 }
 
