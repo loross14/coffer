@@ -35,6 +35,12 @@
 	<string>public.app-category.productivity</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Planisphere opens the vault folders you choose on your Desktop.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Planisphere opens the vault folders you choose in Documents.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Planisphere opens the vault folders you choose in Downloads.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>

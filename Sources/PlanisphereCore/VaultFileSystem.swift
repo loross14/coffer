@@ -99,12 +99,26 @@ internal enum VaultFS {
                 else if errno != EEXIST { throw unavailable("Could not create a folder") }
             }
             let next = openat(current.fd, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-            guard next >= 0 else {
-                throw VaultStoreError.invalid("A folder is unavailable or uses a symbolic link: \(url.path)")
-            }
+            guard next >= 0 else { throw folderError(url, component: component, code: errno) }
             current = try Handle(next)
         }
         return current
+    }
+
+    /// Name what stopped the open. On October 15, 2026 a Desktop folder macOS had not let the app read
+    /// was reported as "unavailable or uses a symbolic link", and the person duplicated the folder instead.
+    static func folderError(_ url: URL, component: String, code: Int32) -> VaultStoreError {
+        let name = "“\(component)”"
+        switch code {
+        case ELOOP, ENOTDIR:
+            return .invalid("\(name) in \(url.path) is a symbolic link or not a folder. Planisphere does not follow links; choose the folder it points to.")
+        case EACCES, EPERM:
+            return .unavailable("macOS has not let Planisphere open \(name) in \(url.path). Allow Planisphere under System Settings › Privacy & Security › Files and Folders (Desktop, Documents and Downloads are protected), or choose a folder elsewhere. If Planisphere is still running from Downloads, move it to Applications and open it again first.")
+        case ENOENT:
+            return .invalid("\(url.path) does not exist: \(name) is missing.")
+        default:
+            return .unavailable("Could not open \(name) in \(url.path) (\(String(cString: strerror(code)))).")
+        }
     }
 
     static func childDirectory(_ parent: Handle, _ name: String, create: Bool = false) throws -> Handle {
