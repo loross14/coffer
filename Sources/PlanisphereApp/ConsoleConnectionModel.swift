@@ -18,6 +18,8 @@ final class ConsoleConnectionModel {
     private(set) var message: String?
     private(set) var browsers: [SignInBrowser] = []
     var chosenBrowserID: String? { didSet { defaults.set(chosenBrowserID, forKey: Self.browserPreferenceKey) } }
+    /// Runs before the device token is revoked, while it can still act for the workspace (reporting takes its key down here).
+    var beforeDisconnect: (@MainActor (ConnectionCredential) async -> Void)?
     private var loaded = false
     private var pending: (handoff: CallbackHandoff, attempt: ConnectionAttempt)?
     private var expiry: Task<Void, Never>?
@@ -119,6 +121,7 @@ final class ConsoleConnectionModel {
     func disconnect() async {
         guard !busy, let value = credential else { return }
         busy = true; message = nil
+        await beforeDisconnect?(value)
         do {
             try await client.disconnect(value.token)
             verified = false

@@ -23,6 +23,7 @@ final class VaultAppModel {
     let console = ConsoleConnectionModel()
     let activity = WorkspaceActivityModel()
     let memory: MemoryModel
+    let reporting: ReportingModel
     var activitySurface: ActivitySurface?
     var sidebarVisible = true
     var commandPalettePresented = false
@@ -82,6 +83,8 @@ final class VaultAppModel {
                 .appendingPathComponent("Planisphere", isDirectory: true)
         }
         memory = MemoryModel(root: historyURL.appendingPathComponent("Memory", isDirectory: true))
+        reporting = ReportingModel(stateURL: historyURL.appendingPathComponent("Reporting/claude-code.json"))
+        console.beforeDisconnect = { [reporting] credential in await reporting.linkWillDisconnect(credential) }
         do { store = try VaultStore(rootURL: historyURL) }
         catch { startupError = error.localizedDescription }
     }

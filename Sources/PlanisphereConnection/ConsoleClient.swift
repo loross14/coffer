@@ -119,9 +119,18 @@ public struct ConsoleClient: Sendable {
         return data
     }
 
+    /// The read scopes plus activity:record, which lets Connect Claude Code also install the console's reporting hooks.
+    public static let permissions = ["prompts:read", "hooks:read", ReportingHooks.scope]
+    /// What a console from before activity:record accepts; it rejects the full list outright (422).
+    public static let legacyPermissions = ["prompts:read", "hooks:read"]
+
     public func begin(_ attempt: ConnectionAttempt) async throws -> URL {
+        do { return try await begin(attempt, permissions: Self.permissions) }
+        catch ConnectionError.invalidResponse { return try await begin(attempt, permissions: Self.legacyPermissions) }
+    }
+    public func begin(_ attempt: ConnectionAttempt, permissions: [String]) async throws -> URL {
         struct Started: Decodable { let authorization_path: String }
-        let data = try await request("/begin", method: "POST", body: ["challenge": attempt.challenge, "state": attempt.state, "label": "Planisphere on Mac"], permissions: ["prompts:read", "hooks:read"])
+        let data = try await request("/begin", method: "POST", body: ["challenge": attempt.challenge, "state": attempt.state, "label": "Planisphere on Mac"], permissions: permissions)
         let result = try JSONDecoder().decode(Started.self, from: data)
         guard result.authorization_path.range(of: "^/console#mac-connect/[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil,
               let url = URL(string: result.authorization_path, relativeTo: origin)?.absoluteURL else { throw ConnectionError.invalidResponse }

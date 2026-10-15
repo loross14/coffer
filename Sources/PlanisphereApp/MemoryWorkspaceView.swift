@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MemoryWorkspaceView: View {
     @Bindable var model: MemoryModel
+    var reporting: ReportingModel? = nil
     var openLocal: (() -> Void)? = nil
     @State private var editing: MemoryFact?
     @State private var editorPresented = false
@@ -51,7 +52,7 @@ struct MemoryWorkspaceView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    AgentConnectionsCard(model: model, line: Self.agentLine, color: Self.agentColor)
+                    AgentConnectionsCard(model: model, reporting: reporting, line: Self.agentLine, color: Self.agentColor)
                     LocalSupportCard(model: model.support, openLocal: openLocal)
                     if !model.enabled { Label("Saving is paused. Existing memories remain available.", systemImage: "pause.circle").foregroundStyle(.secondary) }
                     if let message = model.message { Text(message).font(.callout).textSelection(.enabled) }
@@ -113,11 +114,29 @@ struct MemoryWorkspaceView: View {
     }
 }
 
-/// One row per agent app: whether Planisphere's memory hooks are in it, and the one action that fits.
+/// One row per agent app: whether Planisphere's memory hooks are in it, whether it reports to the console, and the action that fits.
 struct AgentConnectionsCard: View {
     @Bindable var model: MemoryModel
+    var reporting: ReportingModel? = nil
     let line: (AgentHost, String?) -> String
     let color: (String?) -> Color
+
+    static func reportingLine(_ host: AgentHost, _ reporting: ReportingModel?) -> String? {
+        guard let reporting else { return nil }
+        switch host {
+        case .claudeCode: return ReportingModel.line(reporting.state)
+        case .codex: return reporting.linked ? "Reporting for Codex is set up per project from Connections in the console." : nil
+        }
+    }
+    private func reportingColor(_ state: ReportingModel.State) -> Color {
+        switch state {
+        case .connected: Color(nsColor: .systemGreen)
+        case .keyRevoked, .unavailable: Color(nsColor: .systemOrange)
+        default: Color.secondary.opacity(0.5)
+        }
+    }
+    private var connectsReportingToo: Bool { reporting?.canConnect == true }
+    private var busy: Bool { model.busy || reporting?.busy == true }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -125,7 +144,9 @@ struct AgentConnectionsCard: View {
                 Image(systemName: "point.3.connected.trianglepath.dotted").font(.title2).foregroundStyle(PSStyle.accent)
                 VStack(alignment: .leading, spacing: 5) {
                     Text("Take your memory into your agents").font(.callout.weight(.semibold))
-                    Text("Planisphere adds local hooks to each app you connect, and a vault reader for the vaults you have opened here. Your other hooks and settings stay as they are.")
+                    Text(reporting?.linked == true
+                         ? "Planisphere adds local hooks to each app you connect, a vault reader for the vaults you have opened here, and reports Claude Code activity to your console workspace with a key it holds for you. Your other hooks and settings stay as they are."
+                         : "Planisphere adds local hooks to each app you connect, and a vault reader for the vaults you have opened here. Your other hooks and settings stay as they are.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -158,17 +179,37 @@ struct AgentConnectionsCard: View {
                                     .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                             }
                         }
+                        if let reportLine = Self.reportingLine(host, reporting) {
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                if host == .claudeCode, let reporting {
+                                    Circle().fill(reportingColor(reporting.state)).frame(width: 5, height: 5).offset(y: -1)
+                                }
+                                Text(reportLine).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            }.accessibilityIdentifier("agent-reporting-\(host.rawValue)")
+                        }
                     }
                     Spacer(minLength: 12)
                     if report?.broken == true {
                         Button("Reconnect") { Task { await model.connect(host) } }
                     } else if ["installed", "disabled"].contains(model.agentStatus[host]) {
-                        Button("Check setup") { Task { await model.refresh() } }
+                        if host == .claudeCode, let reporting, reporting.canConnect {
+                            Button("Connect reporting") { Task { await reporting.connect() } }
+                        } else if host == .claudeCode, let reporting, reporting.isConnected {
+                            Button("Disconnect reporting") { Task { await reporting.disconnect() } }
+                        }
+                        Button("Check setup") { Task { await model.refresh(); await reporting?.refresh() } }
                     } else {
-                        Button("Connect \(host.name)") { Task { await model.connect(host) } }
+                        // One step: the memory hooks, and the console's reporting hooks when this Mac is linked with permission.
+                        Button("Connect \(host.name)") {
+                            Task {
+                                await model.connect(host)
+                                if host == .claudeCode, connectsReportingToo, model.agentStatus[host] == "installed" { await reporting?.connect() }
+                            }
+                        }
                     }
-                }.buttonStyle(PSButtonStyle()).disabled(model.busy)
+                }.buttonStyle(PSButtonStyle()).disabled(busy)
             }
+            if let message = reporting?.message { Text(message).font(.caption).textSelection(.enabled).accessibilityIdentifier("agent-reporting-message") }
         }.padding(20).background(PSStyle.surface, in: RoundedRectangle(cornerRadius: 14))
     }
 }
