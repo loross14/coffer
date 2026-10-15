@@ -33,12 +33,15 @@ final class MemoryModel {
     private let installer = MemoryHostInstaller()
     let root: URL
     let support: LocalSupportModel
+    /// The hooks Planisphere comes with, installed and read from the Hooks view.
+    let presets: HookPresetsModel
 
     init(root: URL? = nil, helper: URL? = nil) {
         let defaultRoot = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Planisphere/Memory", isDirectory: true)
         self.root = root ?? defaultRoot
         support = LocalSupportModel(root: self.root)
+        presets = HookPresetsModel(root: self.root, runtime: support.runtime.location.runtimeRecord)
         let executable = helper ?? Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("planisphere-memory")
         service = LocalMemory(root: self.root, helper: executable)
     }
@@ -94,6 +97,8 @@ final class MemoryModel {
         do {
             _ = try await call("status")
             message = try await installer.connect(root: root, home: host.home, host: host)
+            // A connected agent also gets the local support hook when the model is installed and answering.
+            await presets.afterConnect(host)
         } catch { message = String(describing: error) }
         await refreshAgent(host)
     }
