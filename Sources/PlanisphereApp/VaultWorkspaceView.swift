@@ -19,7 +19,7 @@ struct VaultWorkspaceView: View {
                 }
                 Group {
                     if model.activitySurface == .memory {
-                        MemoryWorkspaceView(model: model.memory, openLocal: { model.activitySurface = .local })
+                        MemoryWorkspaceView(model: model.memory, reporting: model.reporting, openLocal: { model.activitySurface = .local })
                     } else if model.activitySurface == .local {
                         LocalModelsView(runtime: model.memory.support.runtime, support: model.memory.support,
                                         open: { model.activitySurface = $0 })
@@ -67,12 +67,17 @@ struct VaultWorkspaceView: View {
             Text("Your folder and its local history will be kept. Add the same folder again to return to its history.")
         }
         .onChange(of: confirmRemoval) { _, value in model.workspaceConfirmationPresented = value }
-        .onChange(of: model.console.credential?.token) { _, _ in model.activity.bind(model.console.credential, verified: model.console.verified) }
-        .onChange(of: model.console.verified) { _, _ in model.activity.bind(model.console.credential, verified: model.console.verified) }
-        .onChange(of: model.console.credential?.connection) { _, _ in model.activity.bind(model.console.credential, verified: model.console.verified) }
+        .onChange(of: model.console.credential?.token) { _, _ in bindConsole() }
+        .onChange(of: model.console.verified) { _, _ in bindConsole() }
+        .onChange(of: model.console.credential?.connection) { _, _ in bindConsole() }
         .task {
             if ConsoleConnectionModel.isAvailable { await model.console.load() }
         }
+    }
+
+    private func bindConsole() {
+        model.activity.bind(model.console.credential, verified: model.console.verified)
+        model.reporting.bind(model.console.credential, verified: model.console.verified)
     }
 
     private var workspace: some View {
