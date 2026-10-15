@@ -13,6 +13,32 @@ final class AgentConnectionsTests: XCTestCase {
         XCTAssertEqual(MemoryHostInstaller.arguments(script: script, root: root, home: home, host: .codex, statusOnly: false),
                        ["-B", script.path, "--memory-root", root.path, "--codex-home", home.path])
         XCTAssertEqual(AgentHost.allCases.map(\.name), ["Codex", "Claude Code"])
+        // The vault reader's routes are the vaults this app opened: its registry sits beside the memory root.
+        let registry = MemoryHostInstaller.registry(memoryRoot: root)
+        XCTAssertEqual(registry.path, "/Users/you/registry.json")
+        XCTAssertEqual(MemoryHostInstaller.arguments(script: script, root: root, home: home, host: .claudeCode, statusOnly: true, registry: registry),
+                       ["-B", script.path, "--memory-root", root.path, "--claude-home", home.path, "--registry", registry.path, "--status"])
+    }
+
+    func testCheckSetupReportCarriesTheVaultReader() throws {
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-10-15T03:03:00Z"))
+        let report = AgentHostReport(json: ["status": "installed", "health": "ok", "vault_reader": [
+            "vaults": 2, "command": "/Users/pax/Library/Application Support/Planisphere/Memory/Host/Reader/planisphere-reader",
+            "link": "/Users/pax/.local/bin/planisphere-reader", "reporting": "off", "problem": NSNull(),
+            "routes": [["vault": "Notes", "root": "/Users/pax/Notes", "excluded_paths": ["private"], "read_backend": "planisphere"],
+                       ["vault": "Work", "root": "/Users/pax/Work", "excluded_paths": [], "read_backend": "planisphere"]],
+            "last_run": ["at": "2026-10-15T03:00:00Z", "action": "query", "exit_code": 0]]])
+        let reader = try XCTUnwrap(report.vaultReader)
+        XCTAssertEqual(reader.vaults, ["Notes", "Work"])
+        XCTAssertEqual(reader.line(now: now), "Vault reader: 2 vaults (Notes, Work) · last read 3 min ago")
+        XCTAssertFalse(report.broken)
+        let empty = AgentHostReport(json: ["status": "installed", "vault_reader": ["vaults": 0, "routes": [], "problem": "Open a vault in Planisphere, then Check setup."]])
+        XCTAssertEqual(empty.vaultReader?.line(now: now), "Vault reader: no vaults opened yet")
+        XCTAssertEqual(empty.vaultReader?.problem, "Open a vault in Planisphere, then Check setup.")
+        let one = AgentHostReport(json: ["status": "installed", "vault_reader": ["routes": [["vault": "Notes"]],
+            "last_run": ["at": "2026-10-15T03:02:00Z", "action": "query", "exit_code": 1]]])
+        XCTAssertEqual(one.vaultReader?.line(now: now), "Vault reader: 1 vault (Notes) · last read 1 min ago failed (exit 1)")
+        XCTAssertNil(AgentHostReport(json: ["status": "installed"]).vaultReader, "older hosts report no reader")
     }
 
     func testStatusLinesTellEachAppWhatToDoNext() {
@@ -56,10 +82,17 @@ final class AgentConnectionsTests: XCTestCase {
             "last_run": ["at": ISO8601DateFormatter().string(from: Date().addingTimeInterval(-180)), "action": "hook", "exit_code": 127,
                 "stderr": "sh: /Users/pax/Downloads/Planisphere.app/Contents/Frameworks/Python.framework/Versions/3.13/Python: No such file or directory\n"]])
         let healthy = AgentHostReport(json: ["status": "installed", "health": "ok", "app": "/Applications/Planisphere.app",
-            "last_run": ["at": ISO8601DateFormatter().string(from: Date().addingTimeInterval(-40)), "action": "hook", "exit_code": 0]])
+            "last_run": ["at": ISO8601DateFormatter().string(from: Date().addingTimeInterval(-40)), "action": "hook", "exit_code": 0],
+            "vault_reader": ["vaults": 2, "command": "/Users/pax/Library/Application Support/Planisphere/Memory/Host/Reader/planisphere-reader",
+                "routes": [["vault": "Notes", "root": "/Users/pax/Notes", "excluded_paths": ["private"]], ["vault": "Work", "root": "/Users/pax/Work", "excluded_paths": []]],
+                "last_run": ["at": ISO8601DateFormatter().string(from: Date().addingTimeInterval(-200)), "action": "query", "exit_code": 0]]])
+        let noVaults = AgentHostReport(json: ["status": "installed", "health": "ok", "app": "/Applications/Planisphere.app",
+            "last_run": ["at": ISO8601DateFormatter().string(from: Date().addingTimeInterval(-40)), "action": "hook", "exit_code": 0],
+            "vault_reader": ["vaults": 0, "routes": [], "problem": "Open a vault in Planisphere, then Check setup."]])
         let states: [(String, [AgentHost: String], String?, [AgentHost: AgentHostReport])] = [
             ("fresh", [.codex: "not_installed", .claudeCode: "not_installed"], nil, [:]),
             ("claude-connected", [.codex: "not_installed", .claudeCode: "installed"], AgentHost.claudeCode.installedMessage, [.claudeCode: healthy]),
+            ("claude-no-vaults", [.codex: "not_installed", .claudeCode: "installed"], nil, [.claudeCode: noVaults]),
             ("both", [.codex: "installed", .claudeCode: "disabled"], nil, [:]),
             ("claude-broken", [.codex: "not_installed", .claudeCode: "installed"], nil, [.claudeCode: broken]),
         ]
@@ -71,7 +104,7 @@ final class AgentConnectionsTests: XCTestCase {
                     AgentConnectionsCard(model: model, line: MemoryWorkspaceView.agentLine, color: MemoryWorkspaceView.agentColor)
                     if let message { Text(message).font(.callout) }
                 }.padding(28).frame(width: 760, alignment: .topLeading).background(PSStyle.canvas)
-                try render(view, size: NSSize(width: 760, height: name == "claude-broken" ? 400 : 330), appearance: appearance,
+                try render(view, size: NSSize(width: 760, height: name == "claude-broken" ? 400 : name == "fresh" || name == "both" ? 330 : 370), appearance: appearance,
                            to: output.appendingPathComponent("agents-\(name)-\(mode).png"))
             }
         }

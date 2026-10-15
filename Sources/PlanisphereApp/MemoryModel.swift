@@ -70,7 +70,8 @@ final class MemoryModel {
             await refreshAgents()
         } catch { message = String(describing: error) }
     }
-    private func refreshAgents() async {
+    /// Check setup for every agent app; also run after a vault is added or removed, since the vault reader follows them.
+    func refreshAgents() async {
         for host in AgentHost.allCases { await refreshAgent(host) }
     }
     private func refreshAgent(_ host: AgentHost) async {

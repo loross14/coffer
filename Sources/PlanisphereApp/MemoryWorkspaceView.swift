@@ -125,7 +125,7 @@ struct AgentConnectionsCard: View {
                 Image(systemName: "point.3.connected.trianglepath.dotted").font(.title2).foregroundStyle(PSStyle.accent)
                 VStack(alignment: .leading, spacing: 5) {
                     Text("Take your memory into your agents").font(.callout.weight(.semibold))
-                    Text("Planisphere adds local hooks to each app you connect. Your other hooks and settings stay as they are.")
+                    Text("Planisphere adds local hooks to each app you connect, and a vault reader for the vaults you have opened here. Your other hooks and settings stay as they are.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -144,6 +144,19 @@ struct AgentConnectionsCard: View {
                         }
                         if let run = report?.lastRunLine() {
                             Text(run).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                        }
+                        if let reader = report?.vaultReader, report?.broken != true {
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                // Green: vaults to read. Orange: nothing opened yet (a next step, not a fault). Red: the reader itself is broken.
+                                Circle().fill(color(reader.problem == nil ? (reader.vaults.isEmpty ? nil : "installed") : reader.vaults.isEmpty && reader.command != nil ? "disabled" : "broken"))
+                                    .frame(width: 5, height: 5)
+                                Text(reader.line()).font(.caption2).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                            }
+                            if let problem = reader.problem {
+                                Text(problem).font(.caption2).foregroundStyle(Color(nsColor: .systemRed))
+                                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                            }
                         }
                     }
                     Spacer(minLength: 12)
