@@ -205,6 +205,7 @@ struct ConsoleWorkspaceView: View {
     private var localHooks: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                HookPresetsCard(model: model.memory.presets, openLocal: { model.activitySurface = .local })
                 coverageCard("Configuration is not proof of execution. Host approval, last execution and local delivery errors are not reported by these settings. Workspace shows records actually received.")
                 if activity.local.hooks.isEmpty { empty("No Planisphere hooks found", "No matching hooks were found in the supported Codex and Claude Code settings for this Mac and the selected vault.", symbol: "point.3.connected.trianglepath.dotted") }
                 ForEach(activity.local.hooks) { hook in
