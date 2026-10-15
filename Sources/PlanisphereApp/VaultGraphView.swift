@@ -38,6 +38,10 @@ final class VaultGraphModel {
     private var noteTask: Task<Void, Never>?
     private var searchTask: Task<Void, Never>?
     private var selectionRequest = UUID()
+    private var watcher: VaultChangeWatcher?
+    private var reloadPending = false
+    /// How many refreshes the vault's own changes have started (import, checkpoint, agent writes).
+    private(set) var automaticRefreshes = 0
 
     var selected: GraphNode? { snapshot?.nodes.first { $0.id == selectedID } }
     var matches: [GraphNode] {
@@ -89,6 +93,26 @@ final class VaultGraphModel {
             loading = false
             if !Task.isCancelled { self.error = error.localizedDescription }
         }
+        if reloadPending { reloadPending = false; automaticRefreshes += 1; await load(vault: vault) }
+    }
+
+    /// Refresh on your own when notes change on disk, so an import or an agent's writes show
+    /// up without pressing Refresh. One watcher per vault; a burst of writes is one refresh.
+    func watch(vault: VaultRecord) {
+        guard watcher?.root.path != vault.url.path else { return }
+        watcher?.stop()
+        let created = VaultChangeWatcher(root: vault.url) { [weak self] in
+            Task { @MainActor in self?.vaultChanged(vault: vault) }
+        }
+        watcher = created.start() ? created : nil
+    }
+
+    func vaultChanged(vault: VaultRecord) {
+        guard snapshot != nil || error != nil else { return }
+        if loading { reloadPending = true; return }
+        automaticRefreshes += 1
+        loading = true
+        Task { await load(vault: vault) }
     }
 
     func select(_ id: String?, vault: VaultRecord, location: DocumentLocation? = nil) {
@@ -150,7 +174,7 @@ final class VaultGraphModel {
         }
     }
 
-    func stop() { noteTask?.cancel(); searchTask?.cancel(); measureTask?.cancel() }
+    func stop() { noteTask?.cancel(); searchTask?.cancel(); measureTask?.cancel(); watcher?.stop(); watcher = nil }
 
     /// Measure the current snapshot's graph. Read-only: the bridge measures a
     /// private copy of the admitted Markdown and binds the result to the scan.
@@ -182,7 +206,12 @@ final class VaultGraphModel {
 
 struct VaultGraphView: View {
     let vault: VaultRecord
-    @State private var graph = VaultGraphModel()
+    @State private var graph: VaultGraphModel
+
+    init(vault: VaultRecord, graph: VaultGraphModel = VaultGraphModel()) {
+        self.vault = vault
+        _graph = State(initialValue: graph)
+    }
     @State private var refreshTask: Task<Void, Never>?
     @State private var scopePresented = false
     @State private var settingsPresented = false
@@ -235,7 +264,10 @@ struct VaultGraphView: View {
         .onChange(of: graph.includeDocuments) { _, _ in
             graph.stop(); graph.snapshot = nil; graph.select(nil, vault: vault); refresh()
         }
-        .task { if graph.snapshot == nil { await graph.load(vault: vault) } }
+        .task {
+            if graph.snapshot == nil { await graph.load(vault: vault) }
+            graph.watch(vault: vault)
+        }
         .onDisappear { refreshTask?.cancel(); graph.stop() }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification)) { _ in
             if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { graph.paused = true }
@@ -556,7 +588,7 @@ struct VaultGraphView: View {
 
     private func refresh() {
         refreshTask?.cancel()
-        refreshTask = Task { await graph.load(vault: vault) }
+        refreshTask = Task { await graph.load(vault: vault); graph.watch(vault: vault) }
     }
 }
 

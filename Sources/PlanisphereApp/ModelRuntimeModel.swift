@@ -4,6 +4,17 @@ import Observation
 import PlanisphereModel
 import ServiceManagement
 
+/// The launchd registration behind the model's login item. `SMAppService` in the app;
+/// a stub in tests, since registering real background items is not something a test may do.
+@MainActor
+protocol BackgroundItem: AnyObject {
+    var status: SMAppService.Status { get }
+    func register() throws
+    func unregister() async throws
+}
+
+extension SMAppService: BackgroundItem {}
+
 /// Planisphere's own model: install it once (download or a verified existing copy), then run it
 /// as a background item so connected agents can use it while the app is closed.
 @MainActor @Observable
@@ -30,12 +41,14 @@ final class ModelRuntimeModel {
     /// Agent hook configurations (Codex, Claude Code) whose settings point at this model.
     private(set) var agentHooks = 0
     private var work: Task<Void, Never>?
-    private let service = SMAppService.agent(plistName: "ooo.planisphere.model.plist")
+    private let service: BackgroundItem
     private let home: URL
 
-    init(location: ModelLocation, home: URL = FileManager.default.homeDirectoryForCurrentUser) {
+    init(location: ModelLocation, home: URL = FileManager.default.homeDirectoryForCurrentUser,
+         service: BackgroundItem = SMAppService.agent(plistName: "ooo.planisphere.model.plist")) {
         self.location = location
         self.home = home
+        self.service = service
     }
 
     var busy: Bool {
@@ -160,6 +173,23 @@ final class ModelRuntimeModel {
             try? await Task.sleep(for: .milliseconds(500))
         }
         phase = needsApproval ? .installed : .failed("The model did not start within 30 seconds. Try again, or restart your Mac.")
+    }
+
+    /// After the app moved to Applications, launchd still points the login item at the old bundle
+    /// path. Re-register from the new path when the item was enabled; otherwise leave it alone.
+    /// Returns true when it re-registered.
+    @discardableResult
+    func reregisterAfterMove() async -> Bool {
+        guard service.status == .enabled else { return false }
+        do {
+            try await service.unregister()
+            try service.register()
+        } catch {
+            phase = .failed("Planisphere moved, but its model could not be registered from the new location. \(error.localizedDescription)")
+            return false
+        }
+        await refresh()
+        return true
     }
 
     func stop() async {
