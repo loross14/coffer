@@ -88,7 +88,8 @@ final class AgentConnectionsTests: XCTestCase {
                 "last_run": ["at": ISO8601DateFormatter().string(from: Date().addingTimeInterval(-200)), "action": "query", "exit_code": 0]]])
         let noVaults = AgentHostReport(json: ["status": "installed", "health": "ok", "app": "/Applications/Planisphere.app",
             "last_run": ["at": ISO8601DateFormatter().string(from: Date().addingTimeInterval(-40)), "action": "hook", "exit_code": 0],
-            "vault_reader": ["vaults": 0, "routes": [], "problem": "Open a vault in Planisphere, then Check setup."]])
+            "vault_reader": ["vaults": 0, "routes": [], "command": "/Users/pax/Library/Application Support/Planisphere/Memory/Host/Reader/planisphere-reader",
+                "problem": "Open a vault in Planisphere, then Check setup."]])
         let states: [(String, [AgentHost: String], String?, [AgentHost: AgentHostReport])] = [
             ("fresh", [.codex: "not_installed", .claudeCode: "not_installed"], nil, [:]),
             ("claude-connected", [.codex: "not_installed", .claudeCode: "installed"], AgentHost.claudeCode.installedMessage, [.claudeCode: healthy]),

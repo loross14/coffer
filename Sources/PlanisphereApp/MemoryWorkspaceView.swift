@@ -146,15 +146,15 @@ struct AgentConnectionsCard: View {
                             Text(run).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                         }
                         if let reader = report?.vaultReader, report?.broken != true {
+                            // Green: vaults to read. Orange: nothing opened yet (a next step, not a fault). Red: the reader itself is broken.
+                            let tone = reader.problem == nil ? (reader.vaults.isEmpty ? nil : "installed") : reader.vaults.isEmpty ? "disabled" : "broken"
                             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                // Green: vaults to read. Orange: nothing opened yet (a next step, not a fault). Red: the reader itself is broken.
-                                Circle().fill(color(reader.problem == nil ? (reader.vaults.isEmpty ? nil : "installed") : reader.vaults.isEmpty && reader.command != nil ? "disabled" : "broken"))
-                                    .frame(width: 5, height: 5)
+                                Circle().fill(color(tone)).frame(width: 5, height: 5)
                                 Text(reader.line()).font(.caption2).foregroundStyle(.secondary)
                                     .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                             }
                             if let problem = reader.problem {
-                                Text(problem).font(.caption2).foregroundStyle(Color(nsColor: .systemRed))
+                                Text(problem).font(.caption2).foregroundStyle(tone == "broken" ? Color(nsColor: .systemRed) : Color(nsColor: .systemOrange))
                                     .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                             }
                         }
