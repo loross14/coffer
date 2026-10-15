@@ -81,6 +81,15 @@ final class MemoryModel {
     #if DEBUG
     func preview(agents: [AgentHost: String], message: String? = nil) { agentStatus = agents; self.message = message }
     #endif
+    /// After the app moved, the installed hooks still name the old bundle. Reinstall each host
+    /// that was connected so they point at the new one. Returns the hosts that were reconnected.
+    func reconnectInstalledHosts() async -> [AgentHost] {
+        await refreshAgents()
+        let installed = AgentHost.allCases.filter { agentStatus[$0] == "installed" }
+        for host in installed { await connect(host) }
+        return installed
+    }
+
     func connect(_ host: AgentHost) async {
         guard !busy else { return }; busy = true; defer { busy = false }
         do {

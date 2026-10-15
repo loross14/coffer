@@ -121,6 +121,10 @@ final class TerminalWorkspaceModel {
 
 @MainActor
 final class TerminalApplicationDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        AppRelocationModel().offerIfNeeded()
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let store = TerminalWorkspaceModel.shared
         if store.runningCount > 0 {

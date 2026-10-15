@@ -131,6 +131,21 @@ final class VaultAppModel {
             try await self.reloadVaults(store: store)
             if self.vaults.isEmpty { self.activitySurface = .memory }
         }
+        if AppRelocationModel().consumePendingReregistration() { await completeRelocation() }
+    }
+
+    /// The first launch from Applications after the app moved itself: launchd and the agent hooks
+    /// still name the old bundle, so register the Local model's login item and the Memory hooks again.
+    func completeRelocation() async {
+        let runtime = memory.support.runtime
+        await runtime.refresh()
+        let model = await runtime.reregisterAfterMove()
+        let hosts = await memory.reconnectInstalledHosts()
+        var parts: [String] = []
+        if model { parts.append("the Local model") }
+        if !hosts.isEmpty { parts.append("Memory for " + hosts.map(\.name).joined(separator: " and ")) }
+        guard !parts.isEmpty else { return }
+        memory.message = "Planisphere now runs from Applications. Reconnected " + parts.joined(separator: " and ") + "."
     }
 
     func selectVault(_ id: UUID?) {
