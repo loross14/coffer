@@ -25,6 +25,8 @@ final class MemoryModel {
     private(set) var pendingRepairs = 0
     /// Per agent app: installed, disabled, not_installed or unknown.
     private(set) var agentStatus: [AgentHost: String] = [:]
+    /// Per agent app: the status plus what would stop its hooks and the last hook run (Check setup).
+    private(set) var agentReports: [AgentHost: AgentHostReport] = [:]
     var message: String?
     private var cursor: String?
     private let service: LocalMemory
@@ -68,10 +70,13 @@ final class MemoryModel {
             await refreshAgents()
         } catch { message = String(describing: error) }
     }
-    private func refreshAgents() async {
-        for host in AgentHost.allCases {
-            agentStatus[host] = (try? await installer.connect(root: root, home: host.home, host: host, statusOnly: true)) ?? "unknown"
-        }
+    /// Check setup for every agent app; also run after a vault is added or removed, since the vault reader follows them.
+    func refreshAgents() async {
+        for host in AgentHost.allCases { await refreshAgent(host) }
+    }
+    private func refreshAgent(_ host: AgentHost) async {
+        let report = (try? await installer.status(root: root, home: host.home, host: host)) ?? .unknown
+        agentReports[host] = report; agentStatus[host] = report.status
     }
     func setEnabled(_ value: Bool) async {
         guard !busy else { return }
@@ -79,7 +84,10 @@ final class MemoryModel {
         catch { message = String(describing: error) }
     }
     #if DEBUG
-    func preview(agents: [AgentHost: String], message: String? = nil) { agentStatus = agents; self.message = message }
+    func preview(agents: [AgentHost: String], message: String? = nil, reports: [AgentHost: AgentHostReport] = [:]) {
+        agentStatus = agents; self.message = message
+        agentReports = agents.reduce(into: [:]) { $0[$1.key] = reports[$1.key] ?? AgentHostReport(status: $1.value) }
+    }
     #endif
     func connect(_ host: AgentHost) async {
         guard !busy else { return }; busy = true; defer { busy = false }
@@ -87,7 +95,7 @@ final class MemoryModel {
             _ = try await call("status")
             message = try await installer.connect(root: root, home: host.home, host: host)
         } catch { message = String(describing: error) }
-        agentStatus[host] = (try? await installer.connect(root: root, home: host.home, host: host, statusOnly: true)) ?? "unknown"
+        await refreshAgent(host)
     }
     func save(_ body: String, replacing fact: MemoryFact?) async -> Bool {
         guard !busy else { return false }; busy = true

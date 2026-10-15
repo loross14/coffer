@@ -22,8 +22,9 @@ struct MemoryWorkspaceView: View {
         default: "Status not checked yet"
         }
     }
-    private func agentColor(_ status: String?) -> Color {
+    static func agentColor(_ status: String?) -> Color {
         switch status {
+        case "broken": Color(nsColor: .systemRed)
         case "installed": Color(nsColor: .systemGreen)
         case "disabled": Color(nsColor: .systemOrange)
         default: Color.secondary.opacity(0.5)
@@ -51,7 +52,7 @@ struct MemoryWorkspaceView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    AgentConnectionsCard(model: model, reporting: reporting, line: Self.agentLine, color: agentColor)
+                    AgentConnectionsCard(model: model, reporting: reporting, line: Self.agentLine, color: Self.agentColor)
                     LocalSupportCard(model: model.support, openLocal: openLocal)
                     if !model.enabled { Label("Saving is paused. Existing memories remain available.", systemImage: "pause.circle").foregroundStyle(.secondary) }
                     if let message = model.message { Text(message).font(.callout).textSelection(.enabled) }
@@ -144,30 +145,53 @@ struct AgentConnectionsCard: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("Take your memory into your agents").font(.callout.weight(.semibold))
                     Text(reporting?.linked == true
-                         ? "Planisphere adds local hooks to each app you connect, and reports Claude Code activity to your console workspace with a key it holds for you. Your other hooks and settings stay as they are."
-                         : "Planisphere adds local hooks to each app you connect. Your other hooks and settings stay as they are.")
+                         ? "Planisphere adds local hooks to each app you connect, a vault reader for the vaults you have opened here, and reports Claude Code activity to your console workspace with a key it holds for you. Your other hooks and settings stay as they are."
+                         : "Planisphere adds local hooks to each app you connect, and a vault reader for the vaults you have opened here. Your other hooks and settings stay as they are.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
             ForEach(AgentHost.allCases) { host in
                 Divider()
                 HStack(alignment: .center, spacing: 12) {
-                    Circle().fill(color(model.agentStatus[host])).frame(width: 7, height: 7)
+                    let report = model.agentReports[host]
+                    Circle().fill(color(report?.broken == true ? "broken" : model.agentStatus[host])).frame(width: 7, height: 7)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(host.name).font(.callout.weight(.medium))
-                        Text(line(host, model.agentStatus[host])).font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        if let report = Self.reportingLine(host, reporting) {
+                        Text(report?.broken == true ? "Connected, but its hooks can't run yet." : line(host, model.agentStatus[host]))
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        if let problem = report?.problem {
+                            Text(problem).font(.caption).foregroundStyle(Color(nsColor: .systemRed))
+                                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                        }
+                        if let run = report?.lastRunLine() {
+                            Text(run).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                        }
+                        if let reader = report?.vaultReader, report?.broken != true {
+                            // Green: vaults to read. Orange: nothing opened yet (a next step, not a fault). Red: the reader itself is broken.
+                            let tone = reader.problem == nil ? (reader.vaults.isEmpty ? nil : "installed") : reader.vaults.isEmpty ? "disabled" : "broken"
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Circle().fill(color(tone)).frame(width: 5, height: 5)
+                                Text(reader.line()).font(.caption2).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                            }
+                            if let problem = reader.problem {
+                                Text(problem).font(.caption2).foregroundStyle(tone == "broken" ? Color(nsColor: .systemRed) : Color(nsColor: .systemOrange))
+                                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                            }
+                        }
+                        if let reportLine = Self.reportingLine(host, reporting) {
                             HStack(alignment: .firstTextBaseline, spacing: 6) {
                                 if host == .claudeCode, let reporting {
                                     Circle().fill(reportingColor(reporting.state)).frame(width: 5, height: 5).offset(y: -1)
                                 }
-                                Text(report).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                                Text(reportLine).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                             }.accessibilityIdentifier("agent-reporting-\(host.rawValue)")
                         }
                     }
                     Spacer(minLength: 12)
-                    if ["installed", "disabled"].contains(model.agentStatus[host]) {
+                    if report?.broken == true {
+                        Button("Reconnect") { Task { await model.connect(host) } }
+                    } else if ["installed", "disabled"].contains(model.agentStatus[host]) {
                         if host == .claudeCode, let reporting, reporting.canConnect {
                             Button("Connect reporting") { Task { await reporting.connect() } }
                         } else if host == .claudeCode, let reporting, reporting.isConnected {
