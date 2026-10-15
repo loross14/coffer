@@ -21,8 +21,9 @@ struct MemoryWorkspaceView: View {
         default: "Status not checked yet"
         }
     }
-    private func agentColor(_ status: String?) -> Color {
+    static func agentColor(_ status: String?) -> Color {
         switch status {
+        case "broken": Color(nsColor: .systemRed)
         case "installed": Color(nsColor: .systemGreen)
         case "disabled": Color(nsColor: .systemOrange)
         default: Color.secondary.opacity(0.5)
@@ -50,7 +51,7 @@ struct MemoryWorkspaceView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    AgentConnectionsCard(model: model, line: Self.agentLine, color: agentColor)
+                    AgentConnectionsCard(model: model, line: Self.agentLine, color: Self.agentColor)
                     LocalSupportCard(model: model.support, openLocal: openLocal)
                     if !model.enabled { Label("Saving is paused. Existing memories remain available.", systemImage: "pause.circle").foregroundStyle(.secondary) }
                     if let message = model.message { Text(message).font(.callout).textSelection(.enabled) }
@@ -131,14 +132,24 @@ struct AgentConnectionsCard: View {
             ForEach(AgentHost.allCases) { host in
                 Divider()
                 HStack(alignment: .center, spacing: 12) {
-                    Circle().fill(color(model.agentStatus[host])).frame(width: 7, height: 7)
+                    let report = model.agentReports[host]
+                    Circle().fill(color(report?.broken == true ? "broken" : model.agentStatus[host])).frame(width: 7, height: 7)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(host.name).font(.callout.weight(.medium))
-                        Text(line(host, model.agentStatus[host])).font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                        Text(report?.broken == true ? "Connected, but its hooks can't run yet." : line(host, model.agentStatus[host]))
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        if let problem = report?.problem {
+                            Text(problem).font(.caption).foregroundStyle(Color(nsColor: .systemRed))
+                                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                        }
+                        if let run = report?.lastRunLine() {
+                            Text(run).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                        }
                     }
                     Spacer(minLength: 12)
-                    if ["installed", "disabled"].contains(model.agentStatus[host]) {
+                    if report?.broken == true {
+                        Button("Reconnect") { Task { await model.connect(host) } }
+                    } else if ["installed", "disabled"].contains(model.agentStatus[host]) {
                         Button("Check setup") { Task { await model.refresh() } }
                     } else {
                         Button("Connect \(host.name)") { Task { await model.connect(host) } }
