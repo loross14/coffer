@@ -83,7 +83,8 @@ internal enum VaultFS {
         // Descriptors resolve firmlinks/mount aliases as actual filesystem objects.
         for _ in 0..<4096 {
             if try sameDirectory(ancestor, current) { return true }
-            let parent = try Handle(openat(current.fd, "..", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC))
+            // Comparing ancestor identities requires traversal, not directory listing.
+            let parent = try Handle(openat(current.fd, "..", O_SEARCH | O_NOFOLLOW | O_CLOEXEC))
             if try sameDirectory(current, parent) { return false }
             current = parent
         }
@@ -93,12 +94,17 @@ internal enum VaultFS {
     static func directory(_ url: URL, create: Bool = false) throws -> Handle {
         let url = try absolute(url)
         var current = try Handle(Darwin.open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC))
-        for component in url.pathComponents.dropFirst() {
+        let components = Array(url.pathComponents.dropFirst())
+        for (index, component) in components.enumerated() {
             if create {
                 if mkdirat(current.fd, component, 0o700) == 0 { try sync(current.fd) }
                 else if errno != EEXIST { throw unavailable("Could not create a folder") }
             }
-            let next = openat(current.fd, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            // A readable selected vault need not grant listing access to its parents.
+            // Keep read access for the returned folder and for creation, whose parent
+            // descriptors are fsynced. No-follow checks still apply to every component.
+            let access = !create && index < components.count - 1 ? O_SEARCH : O_RDONLY | O_DIRECTORY
+            let next = openat(current.fd, component, access | O_NOFOLLOW | O_CLOEXEC)
             guard next >= 0 else { throw folderError(url, component: component, code: errno) }
             current = try Handle(next)
         }
