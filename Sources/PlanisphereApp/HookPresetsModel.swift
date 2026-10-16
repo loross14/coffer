@@ -14,9 +14,9 @@ enum HookPreset: String, CaseIterable, Identifiable, Sendable {
     }
     var summary: String {
         switch self {
-        case .context: "Before each reply, the agent receives your memory and the relevant vault context."
+        case .context: "Offers bounded session evidence and native source tools before each reply."
         case .support: "Planisphere's local model prepares that context in the background, on this Mac."
-        case .responseCheck: "A second pair of eyes on each reply before it lands. With Local support on, the local model reads it too."
+        case .responseCheck: "Checks a completed reply and may request one correction. The reply may already be visible. Local model review is optional."
         }
     }
     var symbol: String {
@@ -29,6 +29,11 @@ enum HookPreset: String, CaseIterable, Identifiable, Sendable {
 }
 
 /// One preset's state for one agent app, as the host tools report it from their own files.
+struct HookPolicyValues: Decodable, Sendable, Equatable {
+    var context_enabled: Bool
+    var context_interpretation: String
+    var response_model_review: Bool
+}
 struct HookPresetStatus: Decodable, Sendable, Equatable {
     struct Failure: Decodable, Sendable, Equatable {
         let at: Double
@@ -44,8 +49,24 @@ struct HookPresetStatus: Decodable, Sendable, Equatable {
     var mode: String?
     /// Local support only: ready, not_running or not_installed.
     var model: String?
-    /// Response check only: whether the local model reads each reply.
+    /// Response check only: whether local model review permitted.
     var model_review: Bool?
+    var model_review_origin: String?
+    var activation: String?
+    var execution: String?
+    var revision: String?
+    var receipt_directory: String?
+    var policy_path: String?
+    var policy_values: HookPolicyValues?
+    var policy_origins: [String: String]?
+    var project_scope: String?
+    var delivery_health: String?
+    var last_emission: Double?
+    var ownership: String?
+    var scope: String?
+    var triggers: String?
+    var data_flow: String?
+    var settings_summary: String?
 
     init(id: String, installed: String, runs: Int = 0, last_run: Double? = nil, last_error: Failure? = nil,
          mode: String? = nil, model: String? = nil, model_review: Bool? = nil) {
@@ -66,7 +87,7 @@ actor HookPresetsService {
     }
 
     func run(root: URL, home: URL, host: AgentHost, runtime: URL, install: HookPreset? = nil,
-             bundle: URL = Bundle.main.bundleURL) throws -> HookPresetReport {
+             bundle: URL = Bundle.main.bundleURL, modelReview: Bool? = nil, project: URL? = nil, policy: [String]? = nil) throws -> HookPresetReport {
         let packaged = bundle.pathExtension == "app"
         let checkout = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let source = packaged ? bundle.appendingPathComponent("Contents/Resources/Host") : checkout.appendingPathComponent(".build/memory-host")
@@ -78,6 +99,9 @@ actor HookPresetsService {
         let process = Process(), output = Pipe()
         process.executableURL = python
         process.arguments = Self.arguments(script: script, root: root, home: home, host: host, runtime: runtime, install: install)
+        if let project { process.arguments! += ["--project", project.path] }
+        if let policy { process.arguments! += policy }
+        if let modelReview { process.arguments! += ["--model-review", modelReview ? "on" : "off"] }
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = output; process.standardError = FileHandle.nullDevice
         process.environment = ["PATH": "/usr/bin:/bin", "HOME": FileManager.default.homeDirectoryForCurrentUser.path, "PYTHONDONTWRITEBYTECODE": "1"]
@@ -103,6 +127,7 @@ final class HookPresetsModel {
     private let root: URL
     private let runtime: URL
     private var previewing = false
+    var policyProject: URL? = nil
 
     init(root: URL, runtime: URL) {
         self.root = root
@@ -126,28 +151,42 @@ final class HookPresetsModel {
     }
 
     private func load(_ host: AgentHost) async {
-        do { reports[host] = try await service.run(root: root, home: host.home, host: host, runtime: runtime).presets }
+        do { reports[host] = try await service.run(root: root, home: host.home, host: host, runtime: runtime, project: policyProject).presets }
         catch { reports[host] = nil; message = String(describing: error) }
     }
 
     func install(_ preset: HookPreset, for host: AgentHost) async {
         guard !busy, !previewing else { return }; busy = true; defer { busy = false }
         do {
-            reports[host] = try await service.run(root: root, home: host.home, host: host, runtime: runtime, install: preset).presets
+            reports[host] = try await service.run(root: root, home: host.home, host: host, runtime: runtime, install: preset, project: policyProject).presets
             message = Self.installedMessage(preset, host)
         } catch { message = String(describing: error) }
         checked = true
     }
 
-    /// After Connect: if the local model is installed and answering, give that agent the support hook too.
+    func setPolicy(scope: String, host: AgentHost, field: String, value: String) async {
+        guard !busy, !previewing else { return }; busy = true
+        do {
+            reports[host] = try await service.run(root: root, home: host.home, host: host, runtime: runtime,
+                project: policyProject, policy: ["--policy-scope", scope, "--policy-field", field, "--policy-value", value]).presets
+            message = "Saved the explicit choice. Model availability and host approval remain separate."
+        } catch { message = String(describing: error) }
+        busy = false
+        await refresh()
+    }
+
+    func setModelReview(_ enabled: Bool, for host: AgentHost) async {
+        guard !busy, !previewing else { return }; busy = true; defer { busy = false }
+        do {
+            reports[host] = try await service.run(root: root, home: host.home, host: host, runtime: runtime, modelReview: enabled, project: policyProject).presets
+            message = enabled ? "Local model review enabled for \(host.name). Execution remains unverified until a job is recorded." : "Local model review paused for \(host.name). Bounded checks remain enabled."
+        } catch { message = String(describing: error) }
+    }
+
+    /// Connecting context does not silently opt the user into optional model work.
     func afterConnect(_ host: AgentHost) async {
         guard !previewing else { return }
-        busy = true
         await load(host)
-        busy = false
-        if let support = status(.support, host), support.model == "ready", support.installed == "not_installed" {
-            await install(.support, for: host)
-        }
     }
 
     static func installedMessage(_ preset: HookPreset, _ host: AgentHost) -> String {
@@ -182,8 +221,8 @@ final class HookPresetsModel {
             line = "Installed · \(mode) · \(runs)"
             if status.model == "not_running" { line += " · model not running" }
         case (.responseCheck, _):
-            line = "Installed · \(status.model_review == true ? "the local model reads each reply" : "format checks only; turn on Local support for the model review") · \(runs)"
-        default: line = "Installed · \(runs)"
+            line = "Installed · \(status.model_review == true ? "local model review permitted" : "bounded checks; local model review off") · \(runs)"
+        default: line = "Installed · \(runs) · activation \(status.activation ?? "unknown") · delivery \(status.delivery_health ?? "unverified")"
         }
         if let error = status.last_error, status.installed != "not_installed" || preset == .context {
             line += " · Last error \(relative(error.at, now: now)): \(error.message)"

@@ -36,10 +36,10 @@ final class HookPresetsTests: XCTestCase {
         let installedContext = HookPresetStatus(id: "context", installed: "installed")
         XCTAssertEqual(HookPresetsModel.line(nil, preset: .context, host: .claudeCode, context: nil, now: now), "Status not checked yet")
         XCTAssertEqual(HookPresetsModel.line(installedContext, preset: .context, host: .claudeCode, context: installedContext, now: now),
-                       "Installed · no runs recorded yet")
+                       "Installed · no runs recorded yet · activation unknown · delivery unverified")
         let ran = HookPresetStatus(id: "context", installed: "installed", runs: 12, last_run: now.timeIntervalSince1970 - 180)
         XCTAssertEqual(HookPresetsModel.line(ran, preset: .context, host: .claudeCode, context: ran, now: now),
-                       "Installed · 12 turns · last ran 3 min. ago")
+                       "Installed · 12 turns · last ran 3 min. ago · activation unknown · delivery unverified")
         let failed = HookPresetStatus(id: "context", installed: "installed", runs: 1, last_run: now.timeIntervalSince1970 - 3600,
                                       last_error: .init(at: now.timeIntervalSince1970 - 60, message: "RuntimeError: boom"))
         XCTAssertTrue(HookPresetsModel.line(failed, preset: .context, host: .codex, context: failed, now: now).hasSuffix("Last error 1 min. ago: RuntimeError: boom"))
@@ -63,9 +63,9 @@ final class HookPresetsTests: XCTestCase {
         XCTAssertEqual(HookPresetsModel.line(HookPresetStatus(id: "response-check", installed: "not_installed"), preset: .responseCheck, host: .codex, context: none, now: now),
                        "Install Context provisioning first")
         XCTAssertEqual(HookPresetsModel.line(HookPresetStatus(id: "response-check", installed: "installed", runs: 2, last_run: now.timeIntervalSince1970 - 30, model_review: true), preset: .responseCheck, host: .codex, context: installed, now: now),
-                       "Installed · the local model reads each reply · 2 checks · last ran 30 sec. ago")
+                       "Installed · local model review permitted · 2 checks · last ran 30 sec. ago")
         XCTAssertTrue(HookPresetsModel.line(HookPresetStatus(id: "response-check", installed: "installed", model_review: false), preset: .responseCheck, host: .codex, context: installed, now: now)
-            .contains("format checks only"))
+            .contains("bounded checks"))
     }
 
     /// The real host tools against a disposable Memory root and agent home; nothing in ~/.claude or ~/.codex is read or written.

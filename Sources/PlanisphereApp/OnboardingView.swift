@@ -6,6 +6,7 @@ struct OnboardingView: View {
     @Bindable var model: VaultAppModel
     var interactive = true
     @State private var showLocal = false
+    @State private var showHooks = false
     private var setup: OnboardingModel { model.onboarding }
     private let ink = Color(red: 0.12, green: 0.22, blue: 0.22)
     @Environment(\.colorScheme) private var colorScheme
@@ -165,9 +166,12 @@ struct OnboardingView: View {
                 let report = model.memory.agentReports[host]
                 HStack {
                     Text(host.name).font(.title3.weight(.semibold)); Spacer()
-                    Label(setup.verifiedAgent(report) ? "Live hook verified" : "Waiting for a fresh run", systemImage: setup.verifiedAgent(report) ? "checkmark.circle.fill" : "circle.dotted")
+                    Label(setup.verifiedAgent(report) ? "Hook ran successfully" : "Waiting for a fresh run", systemImage: setup.verifiedAgent(report) ? "checkmark.circle.fill" : "circle.dotted")
                         .font(.caption).foregroundStyle(teal)
                 }
+                Text("Context delivery is separate from a successful hook run.").font(.caption).foregroundStyle(.secondary)
+                Button("Open Hooks") { showHooks = true }.buttonStyle(.link)
+                    .sheet(isPresented: $showHooks) { VStack { HStack { Text("Hooks").font(.headline); Spacer(); Button("Done") { showHooks = false } }.padding(); ScrollView { HookPresetsCard(model: model.memory.presets).padding() } }.frame(width: 720, height: 560).task { await model.memory.presets.refresh() } }
                 Text(host == .claudeCode ? "Connect installs local memory and vault access, and provisions reporting through your signed-in account. No key to copy." : "Connect installs local memory and vault access. Console reporting for Codex uses its separate project integration; this build does not provision that key.")
                     .font(.callout).foregroundStyle(.secondary)
                 HStack {
