@@ -64,7 +64,8 @@ final class OnboardingModel {
         guard !busy else { return }
         let registry = registryURL ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/obsidian/obsidian.json")
-        var urls = existing.map(\.url) + candidates.map(\.url)
+        let knownRecords = Set(candidates.compactMap(\.registeredID))
+        var urls = existing.filter { !knownRecords.contains($0.id) }.map(\.url) + candidates.map(\.url)
         do {
             if FileManager.default.fileExists(atPath: registry.path) {
                 let data = try Data(contentsOf: registry)

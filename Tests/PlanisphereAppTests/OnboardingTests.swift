@@ -136,6 +136,12 @@ final class OnboardingTests: XCTestCase {
         XCTAssertEqual(model.candidates.first?.id, requested.path)
         XCTAssertEqual(model.candidates.first?.registeredID, canonical.id)
         XCTAssertEqual(model.step, .vaultSetup)
+        model.selectSource(id: requested.path, selected: false)
+        let resumed = OnboardingModel(root: root); resumed.load(existing: [canonical])
+        resumed.discover(existing: [canonical], registryURL: root.appendingPathComponent("missing"))
+        XCTAssertEqual(resumed.candidates.count, 1)
+        XCTAssertEqual(resumed.candidates.first?.id, requested.path)
+        XCTAssertEqual(resumed.candidates.first?.selected, false)
     }
     func testOlderSavedSetupWithoutCandidatesStillLoads() throws {
         let root = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
