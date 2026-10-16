@@ -198,28 +198,28 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 22) {
             heading("Bring what you already know.", "Start with your existing Obsidian vaults. These sources will inform World Knowledge in the final step; adding them keeps their files in place.")
             HStack {
-                Button("Choose folders…") { setup.chooseFolders() }.buttonStyle(.bordered)
-                Button("Discover again") { setup.discover(existing: model.vaults) }.buttonStyle(.bordered)
+                Button("Choose folders…") { setup.chooseFolders() }.buttonStyle(.bordered).disabled(setup.busy)
+                Button("Discover again") { setup.discover(existing: model.vaults) }.buttonStyle(.bordered).disabled(setup.busy)
             }
             if setup.candidates.isEmpty {
                 card { Text("No existing vaults found.").font(.headline); Text("Choose a folder, or continue and describe your new knowledge home in the next step.").foregroundStyle(.secondary) }
             } else {
                 card {
-                    ForEach(setup.candidates.indices, id: \.self) { index in
-                        Toggle(isOn: Binding(get: { setup.candidates[index].selected }, set: { setup.candidates[index].selected = $0 })) {
+                    ForEach(setup.candidates) { source in
+                        Toggle(isOn: Binding(get: { setup.candidates.first(where: { $0.id == source.id })?.selected ?? false }, set: { setup.selectSource(id: source.id, selected: $0) })) {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(setup.candidates[index].url.lastPathComponent).font(.headline)
-                                Text(setup.candidates[index].url.path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                                if let error = setup.candidates[index].error { Text(error).font(.caption).foregroundStyle(.orange) }
+                                Text(source.url.lastPathComponent).font(.headline)
+                                Text(source.url.path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                                if let error = source.error { Text(error).font(.caption).foregroundStyle(.orange) }
                             }
-                        }.toggleStyle(.checkbox).padding(.vertical, 5)
+                        }.toggleStyle(.checkbox).padding(.vertical, 5).disabled(setup.busy)
                     }
                 }
             }
             HStack {
                 if !setup.candidates.isEmpty {
                     primary("Add all & continue") {
-                        for i in setup.candidates.indices { setup.candidates[i].selected = true }
+                        setup.selectAllSources()
                         Task { await model.addOnboardingSources() }
                     }
                 }

@@ -143,22 +143,8 @@ final class VaultAppModel {
 
     func addOnboardingSources() async {
         guard let store, !onboarding.busy else { return }
-        onboarding.busy = true; defer { onboarding.busy = false }
-        var failures = false
-        for index in onboarding.candidates.indices where onboarding.candidates[index].selected {
-            do {
-                let record = try await store.register(url: onboarding.candidates[index].url)
-                onboarding.candidates[index].registeredID = record.id
-                onboarding.candidates[index].error = nil
-            } catch { onboarding.candidates[index].error = error.localizedDescription; failures = true }
-        }
+        await onboarding.registerSources { url in try await store.register(url: url) }
         vaults = (try? await store.vaults()) ?? vaults
-        guard !failures else { onboarding.message = "Some folders could not be added. Retry them or deselect them to continue."; return }
-        onboarding.saved.progress.sourcesSelected(onboarding.candidates.filter(\.selected).compactMap(\.registeredID))
-        if onboarding.saved.destination == nil {
-            onboarding.saved.destination = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("World Knowledge")
-        }
-        onboarding.message = nil; _ = onboarding.persist()
     }
 
     func connectOnboardingAgent(_ host: AgentHost) async {

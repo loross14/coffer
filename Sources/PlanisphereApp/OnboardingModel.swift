@@ -2,8 +2,8 @@ import AppKit
 import Observation
 import PlanisphereCore
 
-struct DiscoveredVault: Identifiable, Equatable {
-    var id: String { url.path }
+struct DiscoveredVault: Identifiable, Equatable, Codable {
+    var id: String { url.standardizedFileURL.path }
     let url: URL
     var selected = true
     var registeredID: UUID?
@@ -19,13 +19,18 @@ final class OnboardingModel {
         var purpose = ""
         var verificationStarted: Date?
         var agent: String?
+        // Optional for compatibility with setup saved before source persistence.
+        var candidates: [DiscoveredVault]?
     }
     var saved = Saved()
     var visible = false
     var loaded = false
     var busy = false
     var message: String?
-    var candidates: [DiscoveredVault] = []
+    var candidates: [DiscoveredVault] {
+        get { saved.candidates ?? [] }
+        set { saved.candidates = newValue }
+    }
     var selectedAgent: AgentHost = .claudeCode
     var consent = false
     private let stateURL: URL
@@ -56,6 +61,7 @@ final class OnboardingModel {
         saved.progress.accountVerified(true); _ = persist()
     }
     func discover(existing: [VaultRecord], registryURL: URL? = nil) {
+        guard !busy else { return }
         let registry = registryURL ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/obsidian/obsidian.json")
         var urls = existing.map(\.url) + candidates.map(\.url)
@@ -73,16 +79,79 @@ final class OnboardingModel {
         } catch { message = "Automatic discovery could not finish. Retry, or choose folders manually. " + error.localizedDescription }
         var seen = Set<String>()
         candidates = urls.map(\.standardizedFileURL).filter { seen.insert($0.path).inserted }.sorted { $0.path < $1.path }.map { url in
-            candidates.first(where: { $0.url == url }) ?? DiscoveredVault(url: url, registeredID: existing.first(where: { $0.url == url })?.id)
+            candidates.first(where: { $0.id == url.path }) ?? DiscoveredVault(url: url, registeredID: existing.first(where: { $0.url.standardizedFileURL.path == url.path })?.id)
         }
+        _ = persist()
     }
     func chooseFolders() {
+        guard !busy else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = true
         panel.title = "Choose existing knowledge folders"; panel.prompt = "Add to setup"
         guard panel.runModal() == .OK else { return }
-        for url in panel.urls where !candidates.contains(where: { $0.url == url }) { candidates.append(.init(url: url)) }
+        addFolders(panel.urls)
     }
+    func addFolders(_ urls: [URL]) {
+        guard !busy else { return }
+        for url in urls.map(\.standardizedFileURL) where !candidates.contains(where: { $0.id == url.path }) {
+            candidates.append(.init(url: url))
+        }
+        _ = persist()
+    }
+    func selectSource(id: String, selected: Bool) {
+        guard !busy, let index = candidates.firstIndex(where: { $0.id == id }) else { return }
+        candidates[index].selected = selected
+        _ = persist()
+    }
+    func selectAllSources() {
+        guard !busy else { return }
+        for index in candidates.indices { candidates[index].selected = true }
+        _ = persist()
+    }
+
+    func registerSources(using register: (URL) async throws -> VaultRecord) async {
+        guard !busy else { return }
+        busy = true; defer { busy = false }
+        let sources = candidates.filter(\.selected)
+        // Save the selection before the first suspension, including manual folders.
+        guard persist() else { return }
+        var records: [UUID] = []
+        var failed = false
+        for source in sources {
+            do {
+                let record = try await register(source.url)
+                // The native store may return a canonical spelling for the same folder.
+                // Associate its result with the request identity, never the current row index.
+                records.append(record.id)
+                if let index = candidates.firstIndex(where: { $0.id == source.id }) {
+                    candidates[index].registeredID = record.id
+                    candidates[index].error = nil
+                }
+            } catch {
+                failed = true
+                if let index = candidates.firstIndex(where: { $0.id == source.id }) {
+                    candidates[index].error = error.localizedDescription
+                }
+            }
+            // Preserve partial success and failures even when registration is interrupted.
+            guard persist() else { return }
+        }
+        guard Set(candidates.filter(\.selected).map(\.id)) == Set(sources.map(\.id)) else {
+            message = "Source choices changed while folders were being added. Review your selection and continue again."
+            return
+        }
+        guard !failed else {
+            message = "Some folders could not be added. Retry them or deselect them to continue."
+            return
+        }
+        saved.progress.sourcesSelected(records)
+        if saved.destination == nil {
+            saved.destination = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("World Knowledge")
+        }
+        message = nil
+        _ = persist()
+    }
+
     func chooseDestination() {
         let panel = NSSavePanel()
         panel.title = "Choose your World Knowledge home"; panel.nameFieldStringValue = "World Knowledge"
