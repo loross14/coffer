@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/loross14/planisphere-api",
-  "commit": "f3863e562970072d408e5bc1c878b34d7110c672",
+  "commit": "e5e165b04cb26b193d79fd98ac97143b82a6139b",
   "files": {
     "install_response_controls.py": "a718869bec2c2d0f70ad79e8d30b785ad06d31fca14d04b356a07b9c15188583",
     "planisphere_context.py": "b3303b9673dee23365eb9364c5ab4f31a500e7d74d5c66e8078852831262f6dc",
@@ -43,6 +43,6 @@
     "planisphere_vault_reader.py": "88bafd51cb1e5fb769678d4c36945e37143ff40f9e3e6139fff948d549f34351",
     "planisphere_work_views.py": "86402e403790d8cf230034788e2fa0676123afe97c3055a6715b0cc696a9915a",
     "planisphere_hook_policy.py": "64e77a55690f4c9b2f7f135d1ec7daface177759d5b7b5001d404b9df60499bb",
-    "planisphere_session_context.py": "b9d1e075d734e477c0f16aa8f586dcf747841ea8eaf00ec43445adddc703661c"
+    "planisphere_session_context.py": "e4752ec246cb06146c35e2affb6eefd56054f1e6e40f8db0b5b6d964a3591517"
   }
 }
