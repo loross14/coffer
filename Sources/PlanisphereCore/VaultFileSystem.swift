@@ -248,7 +248,7 @@ internal enum VaultFS {
     }
 
     static func read(_ parent: Handle, _ name: String, maximum: Int = metadataLimit) throws -> Data {
-        let file = try Handle(openat(parent.fd, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC))
+        let file = try Handle(openat(parent.fd, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC))
         let before = try info(file)
         guard (before.st_mode & S_IFMT) == S_IFREG, before.st_size >= 0, before.st_size <= maximum else {
             throw VaultStoreError.corrupt("invalid or oversized metadata file")

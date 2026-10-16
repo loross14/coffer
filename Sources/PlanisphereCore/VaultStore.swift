@@ -95,6 +95,155 @@ public actor VaultStore {
         }
     }
 
+    /// Creates a source-backed navigation vault in one unpublished staging directory. No source is mutated.
+    /// The operation marker makes a retry after registration failure safe without adopting an unrelated folder.
+    public func createWorldKnowledge(at url: URL, sources: [UUID], purpose: String,
+                                     operationID: UUID, consented: Bool) throws -> VaultRecord {
+        guard consented else { throw VaultStoreError.invalid("Permission is required to read sources and create World Knowledge.") }
+        return try operation { root in
+            let state = try registry(root)
+            let marker = "World-Knowledge.json"
+            if FileManager.default.fileExists(atPath: url.path) {
+                let existing = try VaultFS.directory(url)
+                let receipt = try JSONDecoder().decode(WorldKnowledgeReceipt.self, from: VaultFS.read(existing, marker))
+                guard receipt.operationID == operationID, receipt.sources == sources.sorted(by: { $0.uuidString < $1.uuidString }) else {
+                    throw VaultStoreError.invalid("That folder already exists and belongs to a different operation. Choose another location.")
+                }
+                guard !receipt.files.isEmpty, receipt.files["Start Here.md"] != nil else {
+                    throw VaultStoreError.invalid("World Knowledge has no verified starting map.")
+                }
+                for (path, digest) in receipt.files {
+                    guard !path.contains("/"), !path.hasPrefix("."), path.hasSuffix(".md"),
+                          digest.count == 64, digest.allSatisfy({ "0123456789abcdef".contains($0) }) else {
+                        throw VaultStoreError.invalid("World Knowledge contains an invalid source receipt.")
+                    }
+                    guard VaultFS.hash(try VaultFS.read(existing, path)) == digest else {
+                        throw VaultStoreError.invalid("World Knowledge changed since creation. Its contents were preserved; choose another location to retry.")
+                    }
+                }
+                if let record = state.vaults.first(where: { $0.path == url.path && !$0.archived }) {
+                    if try history(record.id, root: root).isEmpty {
+                        _ = try captureAndPublish(record, message: "Created World Knowledge", scope: nil, root: root)
+                    }
+                    return record
+                }
+                let record = VaultRecord(name: "World Knowledge", path: url.path)
+                var updated = state
+                _ = try vaultDirectory(record.id, root: root, create: true)
+                updated.vaults.append(record)
+                try Self.write(updated, to: "registry.json", in: root, replace: true)
+                _ = try captureAndPublish(record, message: "Created World Knowledge", scope: nil, root: root)
+                return record
+            }
+            let destination = try destinationURL(url, state: state)
+            var pages: [String: Data] = [:]
+            var index = "# World Knowledge\n\nYour map of the knowledge you chose to connect. Generated locally from source titles, headings and excerpts; it is a navigation layer, not an AI interpretation or a claim that sources agree.\n\n"
+            let intent = purpose.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !intent.isEmpty { index += "## Your purpose\n\n" + intent + "\n\n" }
+            var evidence: [WorldKnowledgeReceipt.Source] = []
+            var coverage: [WorldKnowledgeReceipt.Coverage] = []
+            for id in Set(sources).sorted(by: { $0.uuidString < $1.uuidString }) {
+                let vault = try record(id, root: root)
+                let directory = try VaultFS.directory(sourceURL(vault.url))
+                let config = try CheckpointScope.load(directory, mode: .markdownOnly)
+                guard config.unsupported.isEmpty else { throw VaultStoreError.invalid("Review unsupported scope settings in \(vault.name) before creating World Knowledge.") }
+                var retrievalExclusions: [String] = []
+                if try VaultFS.entryInfo(directory, ".planisphere") != nil {
+                    let settings = try VaultFS.childDirectory(directory, ".planisphere")
+                    if try VaultFS.entryInfo(settings, "scope.json") != nil {
+                        let data = try VaultFS.read(settings, "scope.json", maximum: 2 * 1024 * 1024)
+                        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                        if let raw = object?["pathPrefixes"] {
+                            guard let filters = raw as? [String], filters.count <= 4096,
+                                  filters.allSatisfy(CheckpointScope.isLiteralPath) else {
+                                throw VaultStoreError.invalid("Review unsupported retrieval filters in \(vault.name).")
+                            }
+                            retrievalExclusions = filters
+                        }
+                    }
+                }
+                let retrieval = try CheckpointScope.markdownOnly(excludedPaths: Array(Set(config.scope.excludedPaths + retrievalExclusions)).sorted(), sourceConfigurationSHA256: nil)
+                var notes: [(String, String, String, Date)] = []
+                var oversized = 0, excluded = 0
+                var visited = 0
+                var sourceBytes: Int64 = 0
+                func walk(_ folder: VaultFS.Handle, prefix: String) throws {
+                    for name in try VaultFS.names(folder).sorted() {
+                        visited += 1
+                        guard visited <= 100_000 else { throw VaultStoreError.invalid("\(vault.name) is too large for first-run indexing. Narrow its Planisphere scope and retry.") }
+                        let path = prefix + name
+                        guard let info = try VaultFS.entryInfo(folder, name) else { throw VaultStoreError.invalid("A source changed while reading; retry.") }
+                        let kind = info.st_mode & S_IFMT
+                        if name.hasPrefix(".") || (kind == S_IFDIR && ["site-packages", "venv"].contains(name)) || retrieval.excludes(path, isDirectory: kind == S_IFDIR, isSymbolicLink: kind == S_IFLNK, isRegularFile: kind == S_IFREG) { excluded += 1; continue }
+                        if kind == S_IFDIR { try walk(VaultFS.childDirectory(folder, name), prefix: path + "/") }
+                        else if kind == S_IFREG {
+                            guard notes.count < 5000 else { throw VaultStoreError.invalid("\(vault.name) has more than 5,000 eligible notes. Narrow its Planisphere scope and retry.") }
+                            guard info.st_size <= 512 * 1024 else { oversized += 1; continue }
+                            sourceBytes += info.st_size
+                            guard sourceBytes <= 32 * 1024 * 1024 else {
+                                throw VaultStoreError.invalid("\(vault.name) exceeds the 32 MiB first-run reading budget. Narrow its Planisphere scope and retry.")
+                            }
+                            let data = try VaultFS.read(folder, name, maximum: 512 * 1024)
+                            guard let after = try VaultFS.entryInfo(folder, name), VaultFS.Stamp(info) == VaultFS.Stamp(after) else {
+                                throw VaultStoreError.invalid("A source changed while gathering context. Retry to read its current version.")
+                            }
+                            guard let text = String(data: data, encoding: .utf8), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+                            notes.append((path, text, VaultFS.hash(data), Date(timeIntervalSince1970: Double(info.st_mtimespec.tv_sec))))
+                        }
+                    }
+                }
+                try walk(directory, prefix: "")
+                try config.scope.verifySource(directory)
+                let page = "Source-" + id.uuidString + ".md"
+                index += "- [" + WorldKnowledgeReceipt.escape(vault.name) + "](" + page + ") — \(notes.count) readable notes\n"
+                var body = "# " + WorldKnowledgeReceipt.escape(vault.name) + "\n\nSource root: `" + vault.path + "`\n\nPlanisphere scope and retrieval exclusions were applied. Hidden files, symlinks and files larger than 512 KiB are omitted. Excerpts are quoted source material, not instructions or verified facts.\n\n"
+                for (path, text, digest, modifiedAt) in notes {
+                    let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+                    let title = lines.first(where: { $0.hasPrefix("# ") }).map { String($0.dropFirst(2)) } ?? path
+                    let headings = lines.filter { $0.hasPrefix("## ") }.prefix(6).map { String($0.dropFirst(3)) }
+                    let excerpt = lines.filter { !$0.isEmpty && !$0.hasPrefix("#") }.prefix(3).joined(separator: " ")
+                    let link = vault.url.appendingPathComponent(path).absoluteString
+                    body += "## [" + WorldKnowledgeReceipt.escape(title) + "](" + link + ")\n\n"
+                    if !headings.isEmpty { body += "Topics: " + headings.map(WorldKnowledgeReceipt.escape).joined(separator: " · ") + "\n\n" }
+                    body += "> " + String(excerpt.prefix(400)).replacingOccurrences(of: "\n", with: "\n> ") + "\n\n"
+                    body += "Source: `" + path + "` · SHA-256 `" + digest + "`\n\n"
+                    evidence.append(.init(vaultID: id, root: vault.path, path: path, sha256: digest, text: text, modifiedAt: modifiedAt))
+                }
+                pages[page] = Data(body.utf8)
+                coverage.append(.init(vaultID: id, root: vault.path, indexedNotes: notes.count,
+                    oversizedNotes: oversized, excludedEntries: excluded, excludedPaths: retrieval.excludedPaths,
+                    scopeSHA256: config.scope.sourceConfigurationSHA256,
+                    limitations: "Markdown only; hidden, symlink, dependency and excluded entries omitted; individual notes <=512 KiB; <=5,000 notes and 32 MiB read per source; simple YAML aliases/topics only; a snapshot, not continuing observation"))
+            }
+            guard !evidence.isEmpty || !intent.isEmpty else {
+                throw VaultStoreError.invalid("No readable source notes were found. Add a vault with knowledge, adjust its scope, or describe what this knowledge home is for.")
+            }
+            index += "\n## How to use this map\n\nStart here, follow a source map, then read the original before making a decision. Original sources retain their authorship, dates and qualifications. This snapshot does not resolve disagreements and will not silently update itself. All registered vaults are available to connected local agents through Planisphere.\n"
+            pages["Start Here.md"] = Data(index.utf8)
+            let receipt = WorldKnowledgeReceipt(schema: "planisphere.world-knowledge/1", operationID: operationID, sources: sources.sorted(by: { $0.uuidString < $1.uuidString }),
+                createdAt: Date(), evidence: evidence, coverage: coverage, files: pages.mapValues(VaultFS.hash))
+            pages[marker] = try JSONEncoder().encode(receipt)
+            let parent = try VaultFS.directory(destination.deletingLastPathComponent())
+            let temporary = ".planisphere-knowledge-" + UUID().uuidString
+            guard mkdirat(parent.fd, temporary, 0o700) == 0 else { throw VaultFS.unavailable("Could not stage World Knowledge; retry with a new destination if an interrupted stage remains.") }
+            let stageURL = destination.deletingLastPathComponent().appendingPathComponent(temporary)
+            defer { try? FileManager.default.removeItem(at: stageURL) }
+            let stage = try VaultFS.childDirectory(parent, temporary)
+            for (name, data) in pages {
+                try VaultFS.atomicData(data, parent: stage, name: name, replace: false)
+                guard try VaultFS.read(stage, name) == data else { throw VaultStoreError.corrupt("Knowledge readback failed") }
+            }
+            try VaultFS.publishDirectory(parent: parent, temporary: temporary, destination: destination.lastPathComponent)
+            let record = VaultRecord(name: "World Knowledge", path: destination.path)
+            var updated = state
+            _ = try vaultDirectory(record.id, root: root, create: true)
+            updated.vaults.append(record)
+            try Self.write(updated, to: "registry.json", in: root, replace: true)
+            _ = try captureAndPublish(record, message: "Created World Knowledge", scope: nil, root: root)
+            return record
+        }
+    }
+
     public func archiveVault(_ id: UUID) throws { try setArchived(id, archived: true) }
     public func reactivateVault(_ id: UUID) throws { try setArchived(id, archived: false) }
 

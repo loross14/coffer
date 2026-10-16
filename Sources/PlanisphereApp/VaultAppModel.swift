@@ -24,6 +24,7 @@ final class VaultAppModel {
     let activity = WorkspaceActivityModel()
     let memory: MemoryModel
     let reporting: ReportingModel
+    let onboarding: OnboardingModel
     var activitySurface: ActivitySurface?
     var sidebarVisible = true
     var commandPalettePresented = false
@@ -75,13 +76,15 @@ final class VaultAppModel {
     @ObservationIgnored private var startupError: String?
     @ObservationIgnored private let grapheine = GrapheineService()
 
-    init() {
-        if let path = ProcessInfo.processInfo.environment["PLANISPHERE_DATA_DIR"], !path.isEmpty {
+    init(dataDirectory: URL? = nil) {
+        if let dataDirectory { historyURL = dataDirectory }
+        else if let path = ProcessInfo.processInfo.environment["PLANISPHERE_DATA_DIR"], !path.isEmpty {
             historyURL = URL(fileURLWithPath: path, isDirectory: true)
         } else {
             historyURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("Planisphere", isDirectory: true)
         }
+        onboarding = OnboardingModel(root: historyURL)
         memory = MemoryModel(root: historyURL.appendingPathComponent("Memory", isDirectory: true))
         reporting = ReportingModel(stateURL: historyURL.appendingPathComponent("Reporting/claude-code.json"))
         console.beforeDisconnect = { [reporting] credential in await reporting.linkWillDisconnect(credential) }
@@ -91,7 +94,7 @@ final class VaultAppModel {
 
     var selectedVault: VaultRecord? { vaults.first { $0.id == selectedVaultID } }
     var canNavigateWorkspace: Bool {
-        !isBusy && !checkpointReviewPresented && !localRecoveryReviewPresented && !workspaceConfirmationPresented && errorMessage == nil
+        !onboarding.visible && !isBusy && !checkpointReviewPresented && !localRecoveryReviewPresented && !workspaceConfirmationPresented && errorMessage == nil
     }
     func toggleCommandPalette() {
         guard canNavigateWorkspace else { return }
@@ -132,9 +135,82 @@ final class VaultAppModel {
                 _ = try await store.register(url: URL(fileURLWithPath: path, isDirectory: true), name: nil)
             }
             try await self.reloadVaults(store: store)
+            self.onboarding.load(existing: self.vaults)
             if self.vaults.isEmpty { self.activitySurface = .memory }
         }
         if AppRelocationModel().consumePendingReregistration() { await completeRelocation() }
+    }
+
+    func addOnboardingSources() async {
+        guard let store, !onboarding.busy else { return }
+        onboarding.busy = true; defer { onboarding.busy = false }
+        var failures = false
+        for index in onboarding.candidates.indices where onboarding.candidates[index].selected {
+            do {
+                let record = try await store.register(url: onboarding.candidates[index].url)
+                onboarding.candidates[index].registeredID = record.id
+                onboarding.candidates[index].error = nil
+            } catch { onboarding.candidates[index].error = error.localizedDescription; failures = true }
+        }
+        vaults = (try? await store.vaults()) ?? vaults
+        guard !failures else { onboarding.message = "Some folders could not be added. Retry them or deselect them to continue."; return }
+        onboarding.saved.progress.sourcesSelected(onboarding.candidates.filter(\.selected).compactMap(\.registeredID))
+        if onboarding.saved.destination == nil {
+            onboarding.saved.destination = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("World Knowledge")
+        }
+        onboarding.message = nil; _ = onboarding.persist()
+    }
+
+    func connectOnboardingAgent(_ host: AgentHost) async {
+        guard !onboarding.busy else { return }
+        onboarding.busy = true; defer { onboarding.busy = false }
+        onboarding.selectedAgent = host
+        onboarding.saved.agent = host.rawValue
+        onboarding.saved.verificationStarted = Date()
+        guard onboarding.persist() else { return }
+        await memory.connect(host)
+        if host == .claudeCode {
+            reporting.bind(console.credential, verified: console.verified)
+            await reporting.refresh()
+            while reporting.busy { try? await Task.sleep(for: .milliseconds(100)) }
+            if reporting.canConnect { await reporting.connect() }
+        }
+    }
+
+    func finishOnboardingAgent() {
+        let host = onboarding.selectedAgent
+        guard onboarding.verifiedAgent(memory.agentReports[host]) else { return }
+        if host == .claudeCode && !reporting.isConnected {
+            onboarding.message = reporting.message ?? "Connect Console reporting before continuing."; return
+        }
+        onboarding.saved.progress.agentVerified(host.rawValue, successfulRun: true)
+        onboarding.message = nil; _ = onboarding.persist()
+        onboarding.discover(existing: vaults)
+    }
+
+    func createOnboardingKnowledge() async {
+        guard let store, onboarding.consent, !onboarding.busy, let destination = onboarding.saved.destination else { return }
+        onboarding.busy = true; onboarding.message = nil
+        defer { onboarding.busy = false }
+        guard onboarding.persist() else { return }
+        do {
+            let record = try await store.createWorldKnowledge(at: destination,
+                sources: onboarding.saved.progress.sourceVaultIDs, purpose: onboarding.saved.purpose,
+                operationID: onboarding.saved.operationID, consented: true)
+            let checkpoints = try await store.checkpoints(vaultID: record.id)
+            guard let latest = checkpoints.last,
+                  try await store.text(vaultID: record.id, checkpointID: latest.id, path: "Start Here.md") != nil else {
+                throw VaultStoreError.invalid("Knowledge was created, but its saved history could not be verified. Retry to finish.")
+            }
+            onboarding.saved.progress.knowledgeCreated(record.id, consented: true, verified: true)
+            guard onboarding.persist() else { return }
+            try await reloadVaults(store: store, preferred: record.id)
+            activitySurface = nil
+            await memory.refreshAgents()
+            onboarding.visible = false
+            notice = "Your World Knowledge map is ready. Open Start Here.md to explore your sources."
+            noticeURL = record.url.appendingPathComponent("Start Here.md")
+        } catch { onboarding.message = error.localizedDescription }
     }
 
     /// The first launch from Applications after the app moved itself: launchd and the agent hooks

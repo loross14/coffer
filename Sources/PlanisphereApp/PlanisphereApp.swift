@@ -9,7 +9,10 @@ struct PlanisphereApp: App {
 
     var body: some Scene {
         WindowGroup("Planisphere") {
-            VaultWorkspaceView(model: model)
+            Group {
+                if model.onboarding.visible { OnboardingView(model: model) }
+                else { VaultWorkspaceView(model: model) }
+            }
                 .frame(minWidth: 1060, minHeight: 660)
                 .task { await model.start() }
                 .onOpenURL { url in

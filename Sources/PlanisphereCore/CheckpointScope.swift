@@ -82,7 +82,7 @@ public struct CheckpointScope: Codable, Equatable, Sendable {
         }
     }
 
-    private static func isLiteralPath(_ path: String) -> Bool {
+    internal static func isLiteralPath(_ path: String) -> Bool {
         guard !path.isEmpty, path.utf8.count <= 4096, !path.hasPrefix("/"),
               !path.contains("\\"), !path.contains(where: { "*?[]{}|^$".contains($0) }),
               !path.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return false }
