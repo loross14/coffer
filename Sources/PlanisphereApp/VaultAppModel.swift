@@ -197,6 +197,7 @@ final class VaultAppModel {
 
     func resumeOnboarding() {
         guard canNavigateWorkspace, onboarding.step != .complete else { return }
+        cancelHistoryLoad()
         onboarding.visible = true
     }
 

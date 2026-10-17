@@ -29,5 +29,11 @@ import PlanisphereCore
         model.retryHistory()
         for _ in 0..<200 where model.isHistoryLoading { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertNil(model.historyReadError); XCTAssertEqual(model.afterText, "b")
+        model.retryHistory()
+        model.resumeOnboarding()
+        for _ in 0..<200 where model.isHistoryLoading { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(model.onboarding.visible)
+        XCTAssertFalse(model.isBusy)
+        XCTAssertTrue(model.historyReadError?.contains("cancelled") == true)
     }
 }
