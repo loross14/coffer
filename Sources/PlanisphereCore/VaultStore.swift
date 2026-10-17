@@ -263,6 +263,58 @@ public actor VaultStore {
         }
     }
 
+    /// One locked, fully verified read for the history screen. No persistent cache:
+    /// corruption or changes between requests are checked again on every load.
+    public struct HistoryView: Sendable {
+        public let checkpoints: [Checkpoint]
+        public let mutationReceipts: [MarkdownMutationReceipt]
+        public let recoveryError: String?
+        public let selectedCheckpointID: UUID?
+        public let changes: [FileChange]
+        public let selectedChangePath: String?
+        public let beforeText: String?
+        public let afterText: String?
+    }
+
+    public func historyView(vaultID: UUID, checkpointID: UUID? = nil, changePath: String? = nil) throws -> HistoryView {
+        try operation { root in
+            let vault = try record(vaultID, root: root)
+            let versions = try history(vaultID, root: root)
+            var receipts: [MarkdownMutationReceipt] = []
+            var recoveryError: String?
+            do { receipts = try mutationReceipts(vault: vault, root: root, verifiedHistory: versions) }
+            catch is CancellationError { throw CancellationError() }
+            catch { recoveryError = error.localizedDescription }
+            let current = versions.first(where: { $0.id == checkpointID }) ?? versions.first
+            let previous = try current?.parentID.map { try checkpoint($0, in: versions) }
+            let changes = Self.compare(previous, current)
+            let selected = changes.first(where: { $0.path == changePath }) ?? changes.first
+            return HistoryView(checkpoints: versions, mutationReceipts: receipts, recoveryError: recoveryError,
+                               selectedCheckpointID: current?.id, changes: changes, selectedChangePath: selected?.path,
+                               beforeText: try preview(selected?.oldEntry, root: root),
+                               afterText: try preview(selected?.newEntry, root: root))
+        }
+    }
+
+    private static func compare(_ previous: Checkpoint?, _ current: Checkpoint?) -> [FileChange] {
+        let old = Dictionary(uniqueKeysWithValues: (previous?.entries ?? []).map { ($0.path, $0) })
+        let new = Dictionary(uniqueKeysWithValues: (current?.entries ?? []).map { ($0.path, $0) })
+        return Set(old.keys).union(new.keys).sorted().compactMap { path in
+            guard old[path] != new[path] else { return nil }
+            return FileChange(path: path, kind: old[path] == nil ? .added : new[path] == nil ? .deleted : .modified,
+                              oldEntry: old[path], newEntry: new[path])
+        }
+    }
+
+    private func preview(_ entry: FileEntry?, root: VaultFS.Handle) throws -> String? {
+        guard let entry, entry.kind != .directory, entry.size <= 512 * 1024, let digest = entry.digest else { return nil }
+        let objects = try VaultFS.childDirectory(root, "objects")
+        let data = try VaultFS.read(objects, digest, maximum: 512 * 1024)
+        guard VaultFS.hash(data) == digest, data.count == entry.size else { throw VaultStoreError.corrupt("file object does not match its manifest") }
+        guard !data.contains(0) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
     public func createCheckpoint(vaultID: UUID, message: String, scope: CheckpointScope? = nil) throws -> Checkpoint {
         try operation { root in try captureAndPublish(record(vaultID, root: root), message: message, scope: scope, root: root) }
     }
@@ -494,12 +546,14 @@ public actor VaultStore {
             throw VaultStoreError.corrupt("capture scope requires checkpoint format 2")
         }
         try checkpoint.captureScope?.validate()
+        let excludedTargets = Set((checkpoint.captureScope?.excludedPaths ?? []).map { $0.hasSuffix("/") ? String($0.dropLast()) : $0 })
         var paths: [String: FileEntry] = [:]
         var portablePaths: Set<String> = []
         var totalBytes: Int64 = 0
         for entry in checkpoint.entries {
+            try Task.checkCancellation()
             try VaultFS.relative(entry.path)
-            guard checkpoint.captureScope?.excludes(entry.path, isDirectory: entry.kind == .directory, isSymbolicLink: entry.kind == .symbolicLink, isRegularFile: entry.kind == .file) != true else {
+            guard checkpoint.captureScope?.exclusionReason(entry.path, isDirectory: entry.kind == .directory, isSymbolicLink: entry.kind == .symbolicLink, isRegularFile: entry.kind == .file, excludedTargets: excludedTargets) == nil else {
                 throw VaultStoreError.corrupt("checkpoint includes a path excluded by its recorded scope")
             }
             guard paths[entry.path] == nil, portablePaths.insert(VaultFS.portablePathKey(entry.path)).inserted,
@@ -554,11 +608,13 @@ public actor VaultStore {
         var objects: [String: Int64] = [:]
         var result: [Checkpoint] = []
         while let current = next {
+            try Task.checkCancellation()
             guard seen.insert(current).inserted else { throw VaultStoreError.corrupt("cyclic history") }
             let version: Checkpoint = try Self.read(current.uuidString + ".json", in: manifests)
             guard version.id == current, version.vaultID == id else { throw VaultStoreError.corrupt("history identity mismatch") }
             try validate(version)
             for entry in version.entries where entry.kind != .directory {
+                try Task.checkCancellation()
                 let digest = entry.digest!
                 if let size = objects[digest] {
                     guard size == entry.size else { throw VaultStoreError.corrupt("inconsistent object sizes") }
@@ -583,7 +639,7 @@ public actor VaultStore {
         guard let digest = entry.digest else { throw VaultStoreError.corrupt("missing file object") }
         let objects = try VaultFS.childDirectory(root, "objects")
         let source = try VaultFS.Handle(openat(objects.fd, digest, O_RDONLY | O_NOFOLLOW | O_CLOEXEC))
-        let result = try VaultFS.stream(source, limit: entry.size)
+        let result = try VaultFS.stream(source, limit: entry.size, cancellable: true)
         guard result.digest == digest, result.size == entry.size else { throw VaultStoreError.corrupt("file object checksum mismatch") }
     }
 
@@ -940,14 +996,16 @@ extension VaultStore {
         }
     }
 
-    private func mutationReceipts(vault: VaultRecord, root: VaultFS.Handle) throws -> [MarkdownMutationReceipt] {
+    private func mutationReceipts(vault: VaultRecord, root: VaultFS.Handle, verifiedHistory: [Checkpoint]? = nil) throws -> [MarkdownMutationReceipt] {
         let folder = try vaultDirectory(vault.id, root: root)
         guard try VaultFS.entryInfo(folder, "mutations") != nil else { return [] }
         let journals = try VaultFS.childDirectory(folder, "mutations")
+        let versions = try verifiedHistory ?? history(vault.id, root: root)
         var result: [MarkdownMutationReceipt] = []
         for name in try VaultFS.names(journals) where !name.hasPrefix(".pending-") {
+            try Task.checkCancellation()
             var journal: MutationJournal = try Self.read(name, in: journals)
-            try validateJournal(journal, name: name, vault: vault, root: root)
+            try validateJournal(journal, name: name, vault: vault, root: root, verifiedHistory: versions)
             if journal.receipt.status == .pending {
                 journal.receipt.status = .interrupted
                 journal.receipt.error = "The app stopped before pruning recorded completion. Inspect the recovery checkpoint and retained files before preparing another change."
@@ -958,7 +1016,7 @@ extension VaultStore {
         return result.sorted { $0.startedAt > $1.startedAt }
     }
 
-    private func validateJournal(_ journal: MutationJournal, name: String, vault: VaultRecord, root: VaultFS.Handle) throws {
+    private func validateJournal(_ journal: MutationJournal, name: String, vault: VaultRecord, root: VaultFS.Handle, verifiedHistory: [Checkpoint]? = nil) throws {
         try journal.plan.validate()
         let receipt = journal.receipt
         guard journal.formatVersion == (journal.plan.textReview == nil ? 1 : 2), name == journal.plan.id.uuidString + ".json",
@@ -975,7 +1033,7 @@ extension VaultStore {
                 throw VaultStoreError.corrupt("invalid recovery acknowledgment")
             }
         }
-        let versions = try history(vault.id, root: root)
+        let versions = try verifiedHistory ?? history(vault.id, root: root)
         let before = try checkpoint(receipt.beforeCheckpointID, in: versions)
         guard before.captureScope == journal.plan.scope, Self.markdownFiles(before.entries) == journal.plan.expectedFiles,
               journal.plan.textReview == nil || before.entries == journal.plan.textReview?.entries else {

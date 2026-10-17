@@ -222,12 +222,13 @@ internal enum VaultFS {
         }
     }
 
-    static func stream(_ source: Handle, destination: Int32? = nil, limit: Int64? = nil) throws -> (digest: String, size: Int64) {
+    static func stream(_ source: Handle, destination: Int32? = nil, limit: Int64? = nil, cancellable: Bool = false) throws -> (digest: String, size: Int64) {
         guard (try info(source).st_mode & S_IFMT) == S_IFREG else { throw VaultStoreError.invalid("Only regular files can be read.") }
         var hasher = SHA256()
         var buffer = [UInt8](repeating: 0, count: 1024 * 1024)
         var total: Int64 = 0
         while true {
+            if cancellable { try Task.checkCancellation() }
             let count = buffer.withUnsafeMutableBytes { Darwin.read(source.fd, $0.baseAddress, $0.count) }
             if count < 0 && errno == EINTR { continue }
             guard count >= 0 else { throw unavailable("Could not read a file") }
