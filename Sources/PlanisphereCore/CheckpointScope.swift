@@ -32,14 +32,22 @@ public struct CheckpointScope: Codable, Equatable, Sendable {
         exclusionReason(relativePath, isDirectory: isDirectory, isSymbolicLink: isSymbolicLink, isRegularFile: isRegularFile) != nil
     }
 
-    internal func exclusionReason(_ path: String, isDirectory: Bool, isSymbolicLink: Bool = false, isRegularFile: Bool = true) -> String? {
-        for rule in excludedPaths {
-            let target = rule.hasSuffix("/") ? String(rule.dropLast()) : rule
-            // Match the path itself without probing whether a link points to a folder.
-            if path == target {
-                return "Planisphere excluded path"
+    internal func exclusionReason(_ path: String, isDirectory: Bool, isSymbolicLink: Bool = false, isRegularFile: Bool = true, excludedTargets: Set<String>? = nil) -> String? {
+        if let excludedTargets {
+            var prefix = ""
+            for component in path.split(separator: "/") {
+                prefix = prefix.isEmpty ? String(component) : prefix + "/" + component
+                if excludedTargets.contains(prefix) { return "Planisphere excluded path" }
             }
-            if path.hasPrefix(target + "/") { return "Planisphere excluded path" }
+        } else {
+            let directoryPath = path + "/"
+            for rule in excludedPaths {
+                if rule.hasSuffix("/") {
+                    if path.hasPrefix(rule) || directoryPath == rule { return "Planisphere excluded path" }
+                } else if path == rule || directoryPath.hasPrefix(rule + "/") {
+                    return "Planisphere excluded path"
+                }
+            }
         }
         // Settings are part of the vault, including plugins' hidden state. Only
         // explicit user filters may omit entries inside this configuration tree.

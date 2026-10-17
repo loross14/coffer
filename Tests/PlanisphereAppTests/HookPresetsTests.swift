@@ -19,6 +19,51 @@ final class HookPresetsTests: XCTestCase {
         XCTAssertEqual(HookPreset.allCases.map(\.name), ["Context provisioning", "Local support", "Response check"])
     }
 
+    func testPersonalAdapterChoicesReachTheUIServiceForBothHosts() async throws {
+        let base = URL(fileURLWithPath: "/private/tmp").appendingPathComponent("personal-hooks-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: base) }
+        func write(_ value: [String: Any], _ url: URL) throws {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try JSONSerialization.data(withJSONObject: value).write(to: url)
+        }
+        let runtime = base.appendingPathComponent("shared"), config = base.appendingPathComponent("personal/policy.json")
+        try FileManager.default.createDirectory(at: runtime, withIntermediateDirectories: true)
+        let bytes = Data("# synthetic reviewed runtime".utf8)
+        try bytes.write(to: runtime.appendingPathComponent("module.py"))
+        let hash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        var entries: [String: Any] = [:]
+        for host in AgentHost.allCases {
+            let name = host == .codex ? "codex" : "claude-code"
+            let home = base.appendingPathComponent(name)
+            let hooks = home.appendingPathComponent(host == .codex ? "hooks.json" : "settings.json")
+            entries[name] = ["id": name, "host": name, "event": "UserPromptSubmit", "file": hooks.path, "args": ["/synthetic/original"]]
+            let command = "/usr/bin/python3 \(config.deletingLastPathComponent().appendingPathComponent("personal_hooks.py").path) --config \(config.path) --entry \(name)"
+            try write(["hooks": ["UserPromptSubmit": [["hooks": [["command": command]]]]]], hooks)
+            try write(["config": config.path], base.appendingPathComponent("Host/Personal-\(name).json"))
+        }
+        try write(["entries": entries, "shared_runtime": ["directory": runtime.path, "files": ["module.py": hash]],
+                   "runtime_sources": [], "hook_policy_path": base.appendingPathComponent("choices.json").path,
+                   "session_context_root": base.appendingPathComponent("state").path], config)
+        let service = HookPresetsService(), absentRuntime = base.appendingPathComponent("absent.json")
+        do {
+            for host in AgentHost.allCases {
+                let report = try await service.run(root: base, home: base.appendingPathComponent(host == .codex ? "codex" : "claude-code"), host: host, runtime: absentRuntime)
+                XCTAssertEqual(report.presets[0].installed, "installed")
+                XCTAssertEqual(report.presets[0].policy_values?.context_enabled, true)
+                XCTAssertEqual(report.presets[0].activation, "unknown")
+            }
+            let changed = try await service.run(root: base, home: base.appendingPathComponent("codex"), host: .codex, runtime: absentRuntime,
+                policy: ["--policy-scope", "global", "--policy-field", "context_enabled", "--policy-value", "false"])
+            XCTAssertEqual(changed.presets[0].policy_values?.context_enabled, false)
+            let other = try await service.run(root: base, home: base.appendingPathComponent("claude-code"), host: .claudeCode, runtime: absentRuntime)
+            XCTAssertEqual(other.presets[0].policy_values?.context_enabled, false)
+            XCTAssertEqual(other.presets[0].policy_origins?["context_enabled"], "global")
+        } catch MemoryHostError.unavailable {
+            throw XCTSkip("Stage the reviewed Host bundle before this integration check")
+        }
+    }
+
     func testReportDecodesWhatTheHostToolsPrint() throws {
         let data = Data("""
         {"host":"claude-code","presets":[

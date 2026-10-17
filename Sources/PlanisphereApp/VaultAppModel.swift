@@ -64,6 +64,9 @@ final class VaultAppModel {
     var localRecoveryReviewPresented = false
     var selectedPruningChangePath: String?
     var permissionReceiptURL: URL?
+    var isHistoryLoading = false
+    @ObservationIgnored private var historyTask: Task<Void, Never>?
+    @ObservationIgnored private var historyLoadID = UUID()
     var isBusy = false
     var busyDescription = ""
     var errorMessage: String?
@@ -94,7 +97,7 @@ final class VaultAppModel {
 
     var selectedVault: VaultRecord? { vaults.first { $0.id == selectedVaultID } }
     var canNavigateWorkspace: Bool {
-        !onboarding.visible && !isBusy && !checkpointReviewPresented && !localRecoveryReviewPresented && !workspaceConfirmationPresented && errorMessage == nil
+        !onboarding.visible && (!isBusy || isHistoryLoading) && !checkpointReviewPresented && !localRecoveryReviewPresented && !workspaceConfirmationPresented && errorMessage == nil
     }
     func toggleCommandPalette() {
         guard canNavigateWorkspace else { return }
@@ -134,16 +137,92 @@ final class VaultAppModel {
             if let path = ProcessInfo.processInfo.environment["PLANISPHERE_DEMO_VAULT"], !path.isEmpty {
                 _ = try await store.register(url: URL(fileURLWithPath: path, isDirectory: true), name: nil)
             }
-            try await self.reloadVaults(store: store)
+            // Recovery must be reachable before history is selected or loaded.
+            self.vaults = try await store.vaults()
             self.onboarding.load(existing: self.vaults)
+            if !self.onboarding.visible { try await self.reloadVaults(store: store, loadHistory: false) }
             if self.vaults.isEmpty { self.activitySurface = .memory }
         }
+        if selectedVaultID != nil { startHistoryLoad() }
         if AppRelocationModel().consumePendingReregistration() { await completeRelocation() }
+    }
+
+    func refreshOnboardingRecovery() async {
+        guard !onboarding.checking, !onboarding.busy else { return }
+        onboarding.checking = true
+        defer { onboarding.checking = false }
+        if [.account, .agent].contains(onboarding.step) {
+            await console.load()
+            await memory.refreshAgents()
+            reporting.bind(console.credential, verified: console.verified)
+            while reporting.busy {
+                guard !Task.isCancelled else { return }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            guard !Task.isCancelled else { return }
+            await reporting.refresh()
+            onboarding.reconcile(accountVerified: console.verified, reports: memory.agentReports,
+                                 reportingConnected: reporting.isConnected)
+        }
+        if onboarding.step == .existingVaults, onboarding.saved.recoveringExistingSetup == true {
+            let knowledge = try? await store?.existingWorldKnowledge()
+            onboarding.reconcile(accountVerified: console.verified, reports: memory.agentReports,
+                                 reportingConnected: reporting.isConnected,
+                                 knowledge: knowledge?.vault, knowledgeSources: knowledge?.sources ?? [])
+        }
+        if onboarding.step == .localModel {
+            await memory.support.runtime.refresh()
+            onboarding.reconcile(accountVerified: console.verified, reports: memory.agentReports,
+                                 reportingConnected: reporting.isConnected,
+                                 localModelInstalled: memory.support.runtime.record != nil)
+        }
+        if onboarding.step == .existingVaults { onboarding.discover(existing: vaults) }
+        if onboarding.step == .complete {
+            await openWorkspaceHistory()
+        }
+    }
+
+    private func openWorkspaceHistory() async {
+        await perform("Opening your vaults") { store in
+            try await self.reloadVaults(store: store, loadHistory: false)
+        }
+        if selectedVaultID != nil { startHistoryLoad() }
+    }
+
+    func leaveOnboarding() {
+        guard !onboarding.busy, !onboarding.checking else { return }
+        onboarding.visible = false
+        Task { await openWorkspaceHistory() }
+    }
+
+    func resumeOnboarding() {
+        guard canNavigateWorkspace, onboarding.step != .complete else { return }
+        cancelHistoryLoad()
+        onboarding.visible = true
+    }
+
+    func verifyExistingOnboardingAgent() async {
+        if onboarding.saved.verificationStarted == nil {
+            onboarding.saved.verificationStarted = Date()
+            guard onboarding.persist() else { return }
+        }
+        await refreshOnboardingRecovery()
+    }
+
+    func connectOnboardingReporting() async {
+        guard !onboarding.busy else { return }
+        onboarding.busy = true
+        reporting.bind(console.credential, verified: console.verified)
+        while reporting.busy { try? await Task.sleep(for: .milliseconds(100)) }
+        await reporting.refresh()
+        if reporting.canConnect { await reporting.connect() }
+        onboarding.busy = false
+        await refreshOnboardingRecovery()
     }
 
     func addOnboardingSources() async {
         guard let store, !onboarding.busy else { return }
-        await onboarding.registerSources { url in try await store.register(url: url) }
+        await onboarding.registerSources(existing: vaults) { url in try await store.register(url: url) }
         vaults = (try? await store.vaults()) ?? vaults
     }
 
@@ -214,44 +293,71 @@ final class VaultAppModel {
     }
 
     func selectVault(_ id: UUID?) {
+        guard (!isBusy || isHistoryLoading), id != selectedVaultID else { return }
         activitySurface = nil
-        guard !isBusy, id != selectedVaultID else { return }
-        Task {
-            await perform("Reading local history") { store in
-                self.selectedVaultID = id
-                self.checkpointMessage = ""
-                self.clearHistory()
-                self.resetPruningForSelectedVault()
-                try await self.reloadHistory(store: store)
-            }
-        }
+        selectedVaultID = id
+        checkpointMessage = ""
+        clearHistory()
+        resetPruningForSelectedVault()
+        startHistoryLoad()
     }
 
     func selectCheckpoint(_ checkpoint: Checkpoint) {
         guard !isBusy, checkpoint.id != selectedCheckpointID else { return }
-        Task {
-            await perform("Reading checkpoint") { store in
-                try await self.loadCheckpoint(checkpoint, store: store)
-            }
-        }
+        startHistoryLoad(checkpointID: checkpoint.id)
     }
 
     func retryHistory() {
         guard !isBusy, selectedVaultID != nil else { return }
-        Task {
-            await perform("Reading local history") { store in
-                try await self.reloadHistory(store: store)
-            }
-        }
+        startHistoryLoad()
     }
 
     func selectChange(_ change: FileChange) {
         guard !isBusy, change.path != selectedChangePath else { return }
-        Task {
-            await perform("Reading file versions") { store in
-                try await self.loadChange(change, store: store)
+        startHistoryLoad(checkpointID: selectedCheckpointID, changePath: change.path)
+    }
+
+    func cancelHistoryLoad() { historyTask?.cancel() }
+
+    private func startHistoryLoad(checkpointID: UUID? = nil, changePath: String? = nil) {
+        historyTask?.cancel()
+        let request = UUID()
+        historyLoadID = request
+        guard let store, let vaultID = selectedVaultID else {
+            isHistoryLoading = false; isBusy = false; busyDescription = ""
+            return
+        }
+        isHistoryLoading = true; isBusy = true; busyDescription = "Reading local history"
+        historyReadError = nil
+        historyTask = Task {
+            defer {
+                if historyLoadID == request {
+                    isHistoryLoading = false; isBusy = false; busyDescription = ""; historyTask = nil
+                }
+            }
+            do {
+                let view = try await store.historyView(vaultID: vaultID, checkpointID: checkpointID, changePath: changePath)
+                try Task.checkCancellation()
+                guard historyLoadID == request, selectedVaultID == vaultID else { return }
+                applyHistory(view)
+            } catch {
+                guard historyLoadID == request, selectedVaultID == vaultID else { return }
+                clearHistory()
+                historyReadError = error is CancellationError ? "History loading was cancelled. Retry when you are ready." : error.localizedDescription
             }
         }
+    }
+
+    private func applyHistory(_ view: VaultStore.HistoryView) {
+        historyReadError = nil
+        localMutationReceipts = view.mutationReceipts
+        localMutationReadError = view.recoveryError.map { "Local pruning recovery records could not be read. Applying is held until these records are available. " + $0 }
+        checkpoints = view.checkpoints
+        selectedCheckpointID = view.selectedCheckpointID
+        changes = view.changes
+        selectedChangePath = view.selectedChangePath
+        beforeText = view.beforeText
+        afterText = view.afterText
     }
 
     func chooseExistingVault() {
@@ -808,7 +914,7 @@ final class VaultAppModel {
         catch { errorMessage = error.localizedDescription }
     }
 
-    private func reloadVaults(store: VaultStore, preferred: UUID? = nil) async throws {
+    private func reloadVaults(store: VaultStore, preferred: UUID? = nil, loadHistory: Bool = true) async throws {
         let updated = try await store.vaults(includeArchived: false)
         let changedList = updated.map(\.id) != vaults.map(\.id)
         vaults = updated
@@ -822,29 +928,13 @@ final class VaultAppModel {
         if changedVault { clearHistory() }
         selectedVaultID = next
         if changedVault { resetPruningForSelectedVault() }
-        try await reloadHistory(store: store)
+        if loadHistory { try await reloadHistory(store: store) }
     }
 
     private func reloadHistory(store: VaultStore, preferred: UUID? = nil) async throws {
         guard let id = selectedVaultID else { clearHistory(); return }
-        do {
-            localMutationReceipts = try await store.mutationReceipts(vaultID: id)
-            localMutationReadError = nil
-        } catch {
-            localMutationReadError = "Local pruning recovery records could not be read. Applying is held until these records are available. \(error.localizedDescription)"
-        }
-        let updated: [Checkpoint]
-        do {
-            updated = try await store.checkpoints(vaultID: id)
-            historyReadError = nil
-        } catch {
-            historyReadError = error.localizedDescription
-            throw error
-        }
-        checkpoints = updated
-        if let checkpoint = updated.first(where: { $0.id == preferred }) ?? updated.first {
-            try await loadCheckpoint(checkpoint, store: store)
-        } else { clearHistory() }
+        do { applyHistory(try await store.historyView(vaultID: id, checkpointID: preferred)) }
+        catch { historyReadError = error.localizedDescription; throw error }
     }
 
     private func clearHistory() {
@@ -855,31 +945,6 @@ final class VaultAppModel {
         selectedChangePath = nil
         beforeText = nil
         afterText = nil
-    }
-
-    private func loadCheckpoint(_ checkpoint: Checkpoint, store: VaultStore) async throws {
-        let result = try await store.changes(vaultID: checkpoint.vaultID, from: checkpoint.parentID, to: checkpoint.id)
-        selectedCheckpointID = checkpoint.id
-        changes = result
-        selectedChangePath = nil
-        beforeText = nil
-        afterText = nil
-        if let first = result.first { try await loadChange(first, store: store) }
-    }
-
-    private func loadChange(_ change: FileChange, store: VaultStore) async throws {
-        guard let checkpoint = selectedCheckpoint else { return }
-        var before: String?
-        var after: String?
-        if let parent = checkpoint.parentID, let kind = change.oldEntry?.kind, kind == .file || kind == .symbolicLink {
-            before = try await store.text(vaultID: checkpoint.vaultID, checkpointID: parent, path: change.path)
-        }
-        if let kind = change.newEntry?.kind, kind == .file || kind == .symbolicLink {
-            after = try await store.text(vaultID: checkpoint.vaultID, checkpointID: checkpoint.id, path: change.path)
-        }
-        selectedChangePath = change.path
-        beforeText = before
-        afterText = after
     }
 
     private func showNotice(_ message: String, url: URL? = nil) {

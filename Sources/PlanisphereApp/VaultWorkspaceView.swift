@@ -133,7 +133,11 @@ struct VaultWorkspaceView: View {
                         ProgressView().controlSize(.small)
                         Text(model.busyDescription).font(.callout).foregroundStyle(.secondary)
                         Spacer()
-                        Text("Keep Planisphere open until this finishes.").font(.caption).foregroundStyle(.secondary)
+                        if model.isHistoryLoading {
+                            Button("Cancel loading") { model.cancelHistoryLoad() }
+                        } else {
+                            Text("Keep Planisphere open until this finishes.").font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                     .padding(.horizontal, 24).padding(.vertical, 12)
                 }
@@ -151,6 +155,11 @@ struct VaultWorkspaceView: View {
             }
             .padding(.leading, 18).padding(.trailing, 10).frame(height: 56)
 
+            if model.onboarding.step != .complete {
+                Button("Finish setup…") { model.resumeOnboarding() }
+                    .buttonStyle(.borderedProminent).padding(.horizontal, 18).padding(.bottom, 12)
+                    .disabled(!model.canNavigateWorkspace)
+            }
             Button { model.toggleCommandPalette() } label: {
                 HStack(spacing: 9) {
                     Image(systemName: "magnifyingglass")
@@ -209,7 +218,7 @@ struct VaultWorkspaceView: View {
             }.padding(.horizontal, 10).padding(.top, 6)
 
             HStack {
-                PSSectionLabel(title: "Your vaults")
+                PSSectionLabel(title: "Knowledge Graphs")
                 Spacer()
                 Menu {
                     Button("Add Existing Vault…", systemImage: "folder.badge.plus") { model.chooseExistingVault() }
@@ -239,7 +248,7 @@ struct VaultWorkspaceView: View {
                                         in: RoundedRectangle(cornerRadius: 8))
                             .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain).disabled(model.isBusy)
+                        .buttonStyle(.plain).disabled(model.isBusy && !model.isHistoryLoading)
                         .help(vault.path)
                         .accessibilityLabel("\(vault.name), local vault")
                         .accessibilityIdentifier("vault-row-\(vault.id.uuidString)")

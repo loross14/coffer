@@ -40,7 +40,7 @@ The store streams file bytes in 1 MiB chunks to new immutable objects, hashes th
 
 This is a validated capture for ordinary concurrent editors, not a filesystem-wide atomic snapshot or a boundary against a hostile process with the same user's unrestricted access. Editing may continue after the captured state. The app does not promise to version every edit. For a known checkpoint, pause external edits and retry if capture reports a change.
 
-Every history read validates the complete published parent chain, metadata checksums, path rules, object sizes and object hashes. Corrupt or missing metadata and objects fail closed; the app does not silently create replacement history. It preserves existing bytes for diagnosis. Verifying all historical objects trades speed for integrity in this first implementation.
+Every history read validates the complete published parent chain, metadata checksums, path rules, object sizes and object hashes. Corrupt or missing metadata and objects fail closed; the app does not silently create replacement history. It preserves existing bytes for diagnosis. The history screen shares one fully verified read across its list, recovery records, comparison and preview. It does not retain a validation cache across requests. History loading is cancellable, and other workspace navigation remains available while it runs.
 
 ## Restore and export
 

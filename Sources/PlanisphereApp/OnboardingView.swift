@@ -58,9 +58,14 @@ struct OnboardingView: View {
                             setup.saved.progress.revisitSources(); setup.consent = false
                             setup.saved.operationID = UUID(); _ = setup.persist()
                             setup.discover(existing: model.vaults)
-                        }.buttonStyle(.plain).foregroundStyle(teal).disabled(setup.busy)
+                        }.buttonStyle(.plain).foregroundStyle(teal).disabled(setup.busy || setup.checking)
                     }
-                    content
+                    if setup.checking { ProgressView("Checking what you’ve already set up…") }
+                    content.disabled(setup.checking)
+                    if !model.vaults.isEmpty {
+                        Button("Finish later — open workspace") { model.leaveOnboarding() }
+                            .disabled(setup.busy || setup.checking)
+                    }
                     if let message = setup.message {
                         Label(message, systemImage: "info.circle").font(.callout).foregroundStyle(.secondary)
                             .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
@@ -72,19 +77,13 @@ struct OnboardingView: View {
             .background(Color(nsColor: .windowBackgroundColor))
         }
         .tint(teal)
-        .task {
-            guard interactive else { return }
-            await model.console.load()
-            if setup.step == .existingVaults { setup.discover(existing: model.vaults) }
-            if setup.step == .agent {
-                model.reporting.bind(model.console.credential, verified: model.console.verified)
-            }
-        }
         .task(id: setup.step) {
-            guard interactive, setup.step == .agent else { return }
-            while !Task.isCancelled {
-                await model.memory.refreshAgents()
+            guard interactive else { return }
+            await model.refreshOnboardingRecovery()
+            while setup.step == .agent && !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled else { break }
+                await model.refreshOnboardingRecovery()
             }
         }
         .sheet(isPresented: Binding(get: { model.console.presented }, set: { model.console.presented = $0 })) {
@@ -154,7 +153,7 @@ struct OnboardingView: View {
     }
     private var agent: some View {
         VStack(alignment: .leading, spacing: 22) {
-            heading("Meet your first agent.", "Connect at least one agent. Keep this window beside a fresh chat and watch its first successful hook run arrive.")
+            heading("Meet your first agent.", "Existing healthy connections are kept. If a run is still missing, open a fresh agent chat beside this window; there’s no need to reinstall.")
             HStack {
                 ForEach(AgentHost.allCases) { host in
                     Button(host == .claudeCode ? "Claude Code · Terminal" : "Codex") { setup.selectedAgent = host }
@@ -175,7 +174,12 @@ struct OnboardingView: View {
                 Text(host == .claudeCode ? "Connect installs local memory and vault access, and provisions reporting through your signed-in account. No key to copy." : "Connect installs local memory and vault access. Console reporting for Codex uses its separate project integration; this build does not provision that key.")
                     .font(.callout).foregroundStyle(.secondary)
                 HStack {
-                    Button("Connect \(host.name)") { Task { await model.connectOnboardingAgent(host) } }.buttonStyle(.borderedProminent).disabled(setup.busy)
+                    if report?.status == "installed", report?.broken == false {
+                        Button("Check existing connection") { Task { await model.verifyExistingOnboardingAgent() } }
+                            .buttonStyle(.borderedProminent).disabled(setup.busy)
+                    } else {
+                        Button("Connect \(host.name)") { Task { await model.connectOnboardingAgent(host) } }.buttonStyle(.borderedProminent).disabled(setup.busy)
+                    }
                     Button("Copy setup prompt") { setup.copyPrompt(setup.setupPrompt(host)) }.buttonStyle(.bordered)
                 }
                 if let report {
@@ -185,6 +189,9 @@ struct OnboardingView: View {
                 if let message = model.memory.message { Text(message).font(.caption).foregroundStyle(.secondary) }
                 if host == .claudeCode {
                     Text(model.reporting.isConnected ? "Console reporting connected" : (model.reporting.message ?? "Reporting connects with your account when you click Connect.")).font(.caption).foregroundStyle(.secondary)
+                    if model.reporting.canConnect {
+                        Button("Connect reporting only") { Task { await model.connectOnboardingReporting() } }.disabled(setup.busy)
+                    }
                     if !model.reporting.isConnected { Button("Manage account connection…") { model.console.presented = true } }
                 }
             }
@@ -214,6 +221,7 @@ struct OnboardingView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(source.url.lastPathComponent).font(.headline)
                                 Text(source.url.path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                                if source.registeredID != nil { Text("Already added — kept in place").font(.caption).foregroundStyle(teal) }
                                 if let error = source.error { Text(error).font(.caption).foregroundStyle(.orange) }
                             }
                         }.toggleStyle(.checkbox).padding(.vertical, 5).disabled(setup.busy)
@@ -222,7 +230,7 @@ struct OnboardingView: View {
             }
             HStack {
                 if !setup.candidates.isEmpty {
-                    primary("Add all & continue") {
+                    primary("Use all & continue") {
                         setup.selectAllSources()
                         Task { await model.addOnboardingSources() }
                     }

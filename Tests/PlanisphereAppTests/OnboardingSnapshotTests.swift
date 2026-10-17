@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import XCTest
+import PlanisphereCore
 @testable import PlanisphereApp
 
 @MainActor
@@ -13,6 +14,9 @@ final class OnboardingSnapshotTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let model = VaultAppModel(dataDirectory: root)
         let setup = model.onboarding
+        let existing = VaultRecord(name: "Research", path: "/Users/you/Documents/Research")
+        model.vaults = [existing]
+        model.memory.preview(agents: [.claudeCode: "installed"], reports: [.claudeCode: .init(status: "installed")])
         setup.saved.destination = URL(fileURLWithPath: "/Users/you/World Knowledge")
         setup.saved.purpose = "A home for my research, writing and projects."
         for index in 0..<6 {
@@ -33,7 +37,7 @@ final class OnboardingSnapshotTests: XCTestCase {
             case 0: setup.saved.progress.accountVerified(true)
             case 1:
                 setup.saved.progress.agentVerified("claudeCode", successfulRun: true)
-                setup.candidates = [.init(url: URL(fileURLWithPath: "/Users/you/Documents/Research")), .init(url: URL(fileURLWithPath: "/Users/you/Documents/Projects"))]
+                setup.candidates = [.init(url: existing.url, registeredID: existing.id), .init(url: URL(fileURLWithPath: "/Users/you/Documents/Projects"))]
             case 2: setup.saved.progress.sourcesSelected([UUID(), UUID()])
             case 3: setup.saved.progress.confirmVaultSetup()
             case 4: setup.saved.progress.finishLocalModelChoice()
