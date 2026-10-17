@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/loross14/planisphere-api",
-  "commit": "7082f8cf89eae8d02351804ec22aa4e57aa25685",
+  "commit": "aac7b56ec9c9e4ba40de9557f3c76d2bf83ebfcb",
   "files": {
     "install_response_controls.py": "7859a4ccefc0d2be9ca592127f727850fc0d836863aa0a0cc02ce567b6934149",
     "planisphere_context.py": "b3303b9673dee23365eb9364c5ab4f31a500e7d74d5c66e8078852831262f6dc",
@@ -13,7 +13,7 @@
     "planisphere_graph.py": "4971941c1a931d55d6945b71fdf3dc5e6bf835931ec93ce3b3cb05cc8dc9ea1b",
     "planisphere_harness.py": "9e3ea0c74bf7dc4bd5344e051df334a3895a96f4488413cea87654d393fae3bb",
     "planisphere_hook_policy.py": "d1658756c21219f0506a2f57d70330e074333e97f4f5e74851033398131d79c4",
-    "planisphere_hook_presets.py": "d8eb603fe4ff16834d6515482cd0462e2ae7b55749b89bb0603bc2031469e5db",
+    "planisphere_hook_presets.py": "d918467482f603cad885aac44557fa25ab50ab3d1a5b79ec4435ce53583c794d",
     "planisphere_instruction_gate.py": "73a7f4b50834796665e4bb26f83ce9b9d0c53169620894a8224c7506a40fd151",
     "planisphere_instructions.py": "31aa6d00e80ce69bb1f0aa54f2da31dbd64048c6dc9007c0208f1ff44de1d446",
     "planisphere_legacy_tasks.py": "c3f67b7fb8890fa068f4df10fb8421bbc800177da4a05dc629efbf0b33f59e15",
@@ -22,7 +22,7 @@
     "planisphere_manual_evidence.py": "17d9915a4ed8d9eface6989595af38fdf3fcf6a300b26b5cebacfaf9d6b5752f",
     "planisphere_memory.py": "d61679a24c6f54da3ff8b89e0aa9659b7f337d5f29c181f31a5f07a244bb8f8e",
     "planisphere_memory_launcher.py": "ae161321f9c46036f24a1a255019a9615da9f08db9f7356d03fd90c6d23b5ef0",
-    "planisphere_memory_setup.py": "65ed8e327731f0e1eaccf7ac2709e16ca3325158fe4e27ee68b2cc74d1572215",
+    "planisphere_memory_setup.py": "9778af0c6714d4eaa93f82949dac0b87c245e1efd3299f15cce0a2e11928600e",
     "planisphere_native_receipt.py": "49ea354766fb7203e4294ac75023b41f1f5c48ab8d1d2e15cba730caea9aa17a",
     "planisphere_payload.py": "c45bc215fd789d2c3a13304ee6f1efb0805b60d371dd0a77ee73997f6842164e",
     "planisphere_personal_adapter.py": "d963a2634881e785365de0cda9ed578e6a8e088eba794530c1c137081ec1422e",
