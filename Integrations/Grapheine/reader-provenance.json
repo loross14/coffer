@@ -1,0 +1,5 @@
+{
+  "source": "loross14/planisphere-api/internal/planisphere_reader.py",
+  "sha256": "1835298f0ea8c6c91afac4e5c7fb1cf6d86d4a24163345006961d839aea74e4a",
+  "scope": "Multi-format reader candidate; shared source with API branch codex/multiformat-reader-2026-10-10"
+}
