@@ -166,3 +166,77 @@ final class OnboardingTests: XCTestCase {
         XCTAssertFalse(model.verifiedAgent(.init(status: "installed", problem: "Broken hook", lastRun: fresh)))
     }
 }
+
+@MainActor
+extension OnboardingTests {
+    private var existingHealthyAgent: AgentHostReport {
+        .init(status: "installed", lastRun: .init(at: Date().addingTimeInterval(-86400), action: "resume", exitCode: 0))
+    }
+    func testLegacyVaultUserGetsRecoveryAndKeepsAccountAgentAndFolders() async throws {
+        let root = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let record = VaultRecord(name: "Research", path: root.appendingPathComponent("Research").path)
+        let model = OnboardingModel(root: root); model.load(existing: [record])
+        XCTAssertTrue(model.visible)
+        XCTAssertEqual(model.candidates.first?.registeredID, record.id)
+        model.reconcile(accountVerified: true, reports: [.codex: existingHealthyAgent], reportingConnected: false)
+        XCTAssertEqual(model.step, .existingVaults)
+        XCTAssertEqual(model.saved.progress.connectedAgent, AgentHost.codex.rawValue)
+        await model.registerSources(existing: [record]) { _ in
+            XCTFail("Already registered folders must not be registered again")
+            return record
+        }
+        XCTAssertEqual(model.step, .vaultSetup)
+        let resumed = OnboardingModel(root: root); resumed.load(existing: [record])
+        XCTAssertEqual(resumed.step, .vaultSetup)
+        XCTAssertEqual(resumed.saved.progress.sourceVaultIDs, [record.id])
+    }
+    func testMissingAccountDoesNotLoseExistingAgentAndClaudeReportingIsSeparate() throws {
+        let root = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let model = OnboardingModel(root: root); model.load(existing: [])
+        model.reconcile(accountVerified: false, reports: [.claudeCode: existingHealthyAgent], reportingConnected: true)
+        XCTAssertEqual(model.step, .account)
+        model.reconcile(accountVerified: true, reports: [.claudeCode: existingHealthyAgent], reportingConnected: false)
+        XCTAssertEqual(model.step, .agent)
+        model.reconcile(accountVerified: true, reports: [.claudeCode: existingHealthyAgent], reportingConnected: true)
+        XCTAssertEqual(model.step, .existingVaults)
+    }
+    func testRecoveryRejectsBrokenUnknownAndFailedAgentsAndPreservesFreshRunRequirement() throws {
+        let root = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let model = OnboardingModel(root: root); model.load(existing: [])
+        var report = existingHealthyAgent
+        report.problem = "Hook target missing"
+        model.reconcile(accountVerified: true, reports: [.codex: report], reportingConnected: true)
+        XCTAssertEqual(model.step, .agent)
+        report = existingHealthyAgent; report.lastRun?.exitCode = 1
+        XCTAssertFalse(model.canReuseAgent(report))
+        XCTAssertFalse(model.canReuseAgent(.unknown))
+        XCTAssertFalse(model.canReuseAgent(.init(status: "installed")))
+        model.saved.verificationStarted = Date()
+        model.reconcile(accountVerified: true, reports: [.codex: existingHealthyAgent], reportingConnected: true)
+        XCTAssertEqual(model.step, .agent)
+    }
+    func testLegacyExistingKnowledgeCompletesWithoutRecreatingButSavedWizardKeepsItsIntent() throws {
+        let root = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let world = VaultRecord(name: "My renamed home", path: root.appendingPathComponent("Home").path)
+        let model = OnboardingModel(root: root); model.load(existing: [world])
+        model.reconcile(accountVerified: true, reports: [.codex: existingHealthyAgent], reportingConnected: false,
+                        knowledge: world, knowledgeSources: [])
+        XCTAssertEqual(model.step, .complete); XCTAssertFalse(model.visible)
+        XCTAssertEqual(model.saved.destination, world.url)
+        let resumed = OnboardingModel(root: root); resumed.load(existing: [world])
+        XCTAssertEqual(resumed.step, .complete); XCTAssertFalse(resumed.visible)
+        let other = try fixture(); defer { try? FileManager.default.removeItem(at: other) }
+        let wizard = sourcesModel(other)
+        wizard.reconcile(accountVerified: true, reports: [:], reportingConnected: true, knowledge: world)
+        XCTAssertEqual(wizard.step, .existingVaults)
+    }
+    func testInstalledOptionalModelIsNotRequestedAgainAndChoicesRemain() throws {
+        let root = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let model = sourcesModel(root)
+        model.saved.progress.sourcesSelected([]); model.saved.progress.confirmVaultSetup()
+        model.saved.purpose = "My chosen purpose"
+        model.reconcile(accountVerified: true, reports: [:], reportingConnected: true, localModelInstalled: true)
+        XCTAssertEqual(model.step, .worldKnowledge)
+        XCTAssertEqual(model.saved.purpose, "My chosen purpose")
+    }
+}

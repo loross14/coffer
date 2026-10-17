@@ -95,6 +95,24 @@ public actor VaultStore {
         }
     }
 
+    /// Recognize an existing managed home without recreating it or requiring unchanged user content.
+    /// Registry membership, native safe reads, schema and an initial checkpoint distinguish it from a name match.
+    public func existingWorldKnowledge() throws -> (vault: VaultRecord, sources: [UUID])? {
+        try operation { root in
+            for record in try registry(root).vaults where !record.archived {
+                guard let directory = try? VaultFS.directory(record.url),
+                      let data = try? VaultFS.read(directory, "World-Knowledge.json"),
+                      let receipt = try? JSONDecoder().decode(WorldKnowledgeReceipt.self, from: data),
+                      receipt.schema == "planisphere.world-knowledge/1",
+                      receipt.files["Start Here.md"] != nil,
+                      (try? VaultFS.read(directory, "Start Here.md")) != nil,
+                      let versions = try? history(record.id, root: root), !versions.isEmpty else { continue }
+                return (record, receipt.sources)
+            }
+            return nil
+        }
+    }
+
     /// Creates a source-backed navigation vault in one unpublished staging directory. No source is mutated.
     /// The operation marker makes a retry after registration failure safe without adopting an unrelated folder.
     public func createWorldKnowledge(at url: URL, sources: [UUID], purpose: String,

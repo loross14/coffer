@@ -155,6 +155,11 @@ struct VaultWorkspaceView: View {
             }
             .padding(.leading, 18).padding(.trailing, 10).frame(height: 56)
 
+            if model.onboarding.step != .complete {
+                Button("Finish setup…") { model.resumeOnboarding() }
+                    .buttonStyle(.borderedProminent).padding(.horizontal, 18).padding(.bottom, 12)
+                    .disabled(!model.canNavigateWorkspace)
+            }
             Button { model.toggleCommandPalette() } label: {
                 HStack(spacing: 9) {
                     Image(systemName: "magnifyingglass")

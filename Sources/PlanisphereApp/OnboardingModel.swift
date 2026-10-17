@@ -21,11 +21,13 @@ final class OnboardingModel {
         var agent: String?
         // Optional for compatibility with setup saved before source persistence.
         var candidates: [DiscoveredVault]?
+        var recoveringExistingSetup: Bool?
     }
     var saved = Saved()
     var visible = false
     var loaded = false
     var busy = false
+    var checking = false
     var message: String?
     var candidates: [DiscoveredVault] {
         get { saved.candidates ?? [] }
@@ -45,10 +47,52 @@ final class OnboardingModel {
                 saved = try JSONDecoder().decode(Saved.self, from: Data(contentsOf: stateURL))
                 visible = saved.progress.step != .complete
                 selectedAgent = AgentHost(rawValue: saved.agent ?? "") ?? .claudeCode
-            } else { visible = existing.isEmpty }
+            } else {
+                visible = true
+                saved.recoveringExistingSetup = !existing.isEmpty
+                saved.candidates = existing.map { DiscoveredVault(url: $0.url, registeredID: $0.id) }
+                _ = persist()
+            }
             persisted = saved
         } catch { visible = true; message = "Saved setup could not be read. " + error.localizedDescription }
     }
+    /// Reuse independently observed setup; never reinstall or change an existing connection here.
+    func reconcile(accountVerified: Bool, reports: [AgentHost: AgentHostReport], reportingConnected: Bool,
+                   knowledge: VaultRecord? = nil, knowledgeSources: [UUID] = [], localModelInstalled: Bool = false) {
+        guard !busy, step != .complete else { return }
+        let before = saved.progress
+        if step == .account, accountVerified { saved.progress.accountVerified(true) }
+        if step == .agent, accountVerified {
+            let hosts = [selectedAgent] + AgentHost.allCases.filter { $0 != selectedAgent }
+            if let host = hosts.first(where: {
+                canReuseAgent(reports[$0]) && ($0 != .claudeCode || reportingConnected)
+            }) {
+                selectedAgent = host; saved.agent = host.rawValue
+                saved.progress.agentVerified(host.rawValue, successfulRun: true)
+            }
+        }
+        // Only migrate a legacy setup. A saved wizard may intentionally be creating another home.
+        if step == .existingVaults, saved.recoveringExistingSetup == true, let knowledge {
+            saved.progress.sourcesSelected(knowledgeSources)
+            saved.destination = knowledge.url
+            saved.progress.confirmVaultSetup()
+            saved.progress.finishLocalModelChoice()
+            saved.progress.knowledgeCreated(knowledge.id, consented: true, verified: true)
+        }
+        if step == .localModel, localModelInstalled { saved.progress.finishLocalModelChoice() }
+        if saved.progress != before {
+            if persist(), step == .complete { visible = false }
+        }
+    }
+
+    func canReuseAgent(_ report: AgentHostReport?) -> Bool {
+        guard let report, report.status == "installed", !report.broken,
+              let run = report.lastRun, let at = run.at, run.exitCode == 0, run.problem == nil,
+              at <= Date().addingTimeInterval(60) else { return false }
+        // An explicit connection attempt still needs its own successful run.
+        return saved.verificationStarted.map { at >= $0.addingTimeInterval(-1) } ?? true
+    }
+
     @discardableResult func persist() -> Bool {
         do {
             try JSONEncoder().encode(saved).write(to: stateURL, options: .atomic)
@@ -80,7 +124,11 @@ final class OnboardingModel {
         } catch { message = "Automatic discovery could not finish. Retry, or choose folders manually. " + error.localizedDescription }
         var seen = Set<String>()
         candidates = urls.map(\.standardizedFileURL).filter { seen.insert($0.path).inserted }.sorted { $0.path < $1.path }.map { url in
-            candidates.first(where: { $0.id == url.path }) ?? DiscoveredVault(url: url, registeredID: existing.first(where: { $0.url.standardizedFileURL.path == url.path })?.id)
+            var candidate = candidates.first(where: { $0.id == url.path }) ?? DiscoveredVault(url: url)
+            if let record = existing.first(where: { $0.url.standardizedFileURL.path == url.path }) {
+                candidate.registeredID = record.id
+            }
+            return candidate
         }
         _ = persist()
     }
@@ -110,7 +158,7 @@ final class OnboardingModel {
         _ = persist()
     }
 
-    func registerSources(using register: (URL) async throws -> VaultRecord) async {
+    func registerSources(existing: [VaultRecord] = [], using register: (URL) async throws -> VaultRecord) async {
         guard !busy else { return }
         busy = true; defer { busy = false }
         let sources = candidates.filter(\.selected)
@@ -120,7 +168,10 @@ final class OnboardingModel {
         var failed = false
         for source in sources {
             do {
-                let record = try await register(source.url)
+                let record: VaultRecord
+                if let existingRecord = existing.first(where: { $0.id == source.registeredID }) {
+                    record = existingRecord
+                } else { record = try await register(source.url) }
                 // The native store may return a canonical spelling for the same folder.
                 // Associate its result with the request identity, never the current row index.
                 records.append(record.id)

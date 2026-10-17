@@ -38,6 +38,10 @@ struct PlanisphereApp: App {
                     .disabled(!model.canNavigateWorkspace || model.commandPalettePresented)
             }
             CommandMenu("Workspace") {
+                if model.onboarding.step != .complete {
+                    Button("Finish setup…") { model.resumeOnboarding() }
+                        .disabled(!model.canNavigateWorkspace)
+                }
                 if ConsoleConnectionModel.isAvailable {
                     Button("Console Connection…") { model.console.presented = true }
                         .disabled(!model.canNavigateWorkspace)
