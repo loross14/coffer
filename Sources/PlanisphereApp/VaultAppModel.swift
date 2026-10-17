@@ -134,8 +134,10 @@ final class VaultAppModel {
             if let path = ProcessInfo.processInfo.environment["PLANISPHERE_DEMO_VAULT"], !path.isEmpty {
                 _ = try await store.register(url: URL(fileURLWithPath: path, isDirectory: true), name: nil)
             }
-            try await self.reloadVaults(store: store)
+            // Recovery must be reachable even when an old vault's history cannot load.
+            self.vaults = try await store.vaults()
             self.onboarding.load(existing: self.vaults)
+            if !self.onboarding.visible { try await self.reloadVaults(store: store) }
             if self.vaults.isEmpty { self.activitySurface = .memory }
         }
         if AppRelocationModel().consumePendingReregistration() { await completeRelocation() }
@@ -171,6 +173,15 @@ final class VaultAppModel {
                                  localModelInstalled: memory.support.runtime.record != nil)
         }
         if onboarding.step == .existingVaults { onboarding.discover(existing: vaults) }
+        if onboarding.step == .complete {
+            await perform("Opening your vaults") { store in try await self.reloadVaults(store: store) }
+        }
+    }
+
+    func leaveOnboarding() {
+        guard !onboarding.busy, !onboarding.checking else { return }
+        onboarding.visible = false
+        Task { await perform("Opening your vaults") { store in try await self.reloadVaults(store: store) } }
     }
 
     func resumeOnboarding() {

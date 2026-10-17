@@ -240,3 +240,21 @@ extension OnboardingTests {
         XCTAssertEqual(model.saved.purpose, "My chosen purpose")
     }
 }
+
+@MainActor
+extension OnboardingTests {
+    func testLegacyStartupOpensRecoveryBeforeSelectingAndLoadingHistory() async throws {
+        let root = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("Source")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        let store = try VaultStore(rootURL: root.appendingPathComponent("State"))
+        let record = try await store.register(url: source)
+        let model = VaultAppModel(dataDirectory: root.appendingPathComponent("State"))
+        await model.start()
+        XCTAssertTrue(model.onboarding.visible)
+        XCTAssertEqual(model.vaults.map(\.id), [record.id])
+        XCTAssertNil(model.selectedVaultID, "History is deferred until the user opens the workspace")
+        XCTAssertFalse(model.isBusy)
+        XCTAssertNil(model.errorMessage)
+    }
+}
