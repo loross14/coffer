@@ -1,9 +1,9 @@
 # Planisphere for Mac — working here
 
-This is the **only** Mac app checkout to edit: `/Users/logan/planisphere-build/planisphere-mac`, branch `main`
+This is the **only** Mac app checkout to edit: `/Users/logan/planisphere-worktrees/repos/planisphere-mac`, branch `main`
 (GitHub `loross14/coffer`, bundle ID `ooo.planisphere.mac`). Consolidated 2026-10-17; the previous 28 worktrees
 and temp clones were removed, their branches merged or archived. Do not create new worktrees inside the
-`planisphere-build` vault; if you need isolation, put a worktree under `/Users/logan/planisphere-worktrees/`.
+`planisphere-build` knowledge graph (code left it on 2026-10-17); task worktrees go under `/Users/logan/planisphere-worktrees/`, sibling repos sit beside this one under `repos/`.
 `CLAUDE.md` is a symlink to this file.
 
 ## Orientation
