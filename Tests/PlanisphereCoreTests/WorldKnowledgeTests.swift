@@ -78,3 +78,23 @@ extension WorldKnowledgeTests {
         XCTAssertNotEqual(source.sha256, changed.sha256)
     }
 }
+
+extension WorldKnowledgeTests {
+    func testRecognizesExistingManagedHomeAfterUserEditsWithoutCreatingHistory() async throws {
+        let f = try VaultStoreTests.Fixture(); defer { f.clean() }
+        let source = try await f.store.register(url: f.source)
+        let absent = try await f.store.existingWorldKnowledge()
+        XCTAssertNil(absent)
+        let destination = f.base.appendingPathComponent("Knowledge")
+        let world = try await f.store.createWorldKnowledge(at: destination, sources: [source.id], purpose: "Learning", operationID: UUID(), consented: true)
+        try Data("# My edited home".utf8).write(to: destination.appendingPathComponent("Start Here.md"))
+        let recovered = try await f.store.existingWorldKnowledge()
+        XCTAssertEqual(recovered?.vault.id, world.id)
+        XCTAssertEqual(recovered?.sources, [source.id])
+        let checkpoints = try await f.store.checkpoints(vaultID: world.id)
+        XCTAssertEqual(checkpoints.count, 1)
+        try FileManager.default.removeItem(at: destination.appendingPathComponent("Start Here.md"))
+        let missing = try await f.store.existingWorldKnowledge()
+        XCTAssertNil(missing)
+    }
+}

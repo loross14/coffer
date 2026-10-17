@@ -141,9 +141,65 @@ final class VaultAppModel {
         if AppRelocationModel().consumePendingReregistration() { await completeRelocation() }
     }
 
+    func refreshOnboardingRecovery() async {
+        guard !onboarding.checking, !onboarding.busy else { return }
+        onboarding.checking = true
+        defer { onboarding.checking = false }
+        if [.account, .agent].contains(onboarding.step) {
+            await console.load()
+            await memory.refreshAgents()
+            reporting.bind(console.credential, verified: console.verified)
+            while reporting.busy {
+                guard !Task.isCancelled else { return }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            guard !Task.isCancelled else { return }
+            await reporting.refresh()
+            onboarding.reconcile(accountVerified: console.verified, reports: memory.agentReports,
+                                 reportingConnected: reporting.isConnected)
+        }
+        if onboarding.step == .existingVaults, onboarding.saved.recoveringExistingSetup == true {
+            let knowledge = try? await store?.existingWorldKnowledge()
+            onboarding.reconcile(accountVerified: console.verified, reports: memory.agentReports,
+                                 reportingConnected: reporting.isConnected,
+                                 knowledge: knowledge?.vault, knowledgeSources: knowledge?.sources ?? [])
+        }
+        if onboarding.step == .localModel {
+            await memory.support.runtime.refresh()
+            onboarding.reconcile(accountVerified: console.verified, reports: memory.agentReports,
+                                 reportingConnected: reporting.isConnected,
+                                 localModelInstalled: memory.support.runtime.record != nil)
+        }
+        if onboarding.step == .existingVaults { onboarding.discover(existing: vaults) }
+    }
+
+    func resumeOnboarding() {
+        guard canNavigateWorkspace, onboarding.step != .complete else { return }
+        onboarding.visible = true
+    }
+
+    func verifyExistingOnboardingAgent() async {
+        if onboarding.saved.verificationStarted == nil {
+            onboarding.saved.verificationStarted = Date()
+            guard onboarding.persist() else { return }
+        }
+        await refreshOnboardingRecovery()
+    }
+
+    func connectOnboardingReporting() async {
+        guard !onboarding.busy else { return }
+        onboarding.busy = true
+        reporting.bind(console.credential, verified: console.verified)
+        while reporting.busy { try? await Task.sleep(for: .milliseconds(100)) }
+        await reporting.refresh()
+        if reporting.canConnect { await reporting.connect() }
+        onboarding.busy = false
+        await refreshOnboardingRecovery()
+    }
+
     func addOnboardingSources() async {
         guard let store, !onboarding.busy else { return }
-        await onboarding.registerSources { url in try await store.register(url: url) }
+        await onboarding.registerSources(existing: vaults) { url in try await store.register(url: url) }
         vaults = (try? await store.vaults()) ?? vaults
     }
 
