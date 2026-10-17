@@ -137,8 +137,10 @@ final class VaultAppModel {
             if let path = ProcessInfo.processInfo.environment["PLANISPHERE_DEMO_VAULT"], !path.isEmpty {
                 _ = try await store.register(url: URL(fileURLWithPath: path, isDirectory: true), name: nil)
             }
-            try await self.reloadVaults(store: store, loadHistory: false)
+            // Recovery must be reachable before history is selected or loaded.
+            self.vaults = try await store.vaults()
             self.onboarding.load(existing: self.vaults)
+            if !self.onboarding.visible { try await self.reloadVaults(store: store, loadHistory: false) }
             if self.vaults.isEmpty { self.activitySurface = .memory }
         }
         if selectedVaultID != nil { startHistoryLoad() }
@@ -175,6 +177,22 @@ final class VaultAppModel {
                                  localModelInstalled: memory.support.runtime.record != nil)
         }
         if onboarding.step == .existingVaults { onboarding.discover(existing: vaults) }
+        if onboarding.step == .complete {
+            await openWorkspaceHistory()
+        }
+    }
+
+    private func openWorkspaceHistory() async {
+        await perform("Opening your vaults") { store in
+            try await self.reloadVaults(store: store, loadHistory: false)
+        }
+        if selectedVaultID != nil { startHistoryLoad() }
+    }
+
+    func leaveOnboarding() {
+        guard !onboarding.busy, !onboarding.checking else { return }
+        onboarding.visible = false
+        Task { await openWorkspaceHistory() }
     }
 
     func resumeOnboarding() {

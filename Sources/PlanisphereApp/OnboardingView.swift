@@ -63,7 +63,7 @@ struct OnboardingView: View {
                     if setup.checking { ProgressView("Checking what you’ve already set up…") }
                     content.disabled(setup.checking)
                     if !model.vaults.isEmpty {
-                        Button("Finish later — open workspace") { setup.visible = false }
+                        Button("Finish later — open workspace") { model.leaveOnboarding() }
                             .disabled(setup.busy || setup.checking)
                     }
                     if let message = setup.message {
