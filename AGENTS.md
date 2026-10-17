@@ -35,10 +35,14 @@ one Planisphere runs at a time. After any acceptance launch, quit it and `lsregi
 ## Shipping (public line only)
 1. Bump version/build in `Resources/Info.plist`; PR to `main`; merge (Logan merges; GitHub Actions is billing-locked, run tests locally).
 2. `source scripts/release-env.sh && ./scripts/package-mac.sh`; `check-package.py`; `codesign --verify --deep --strict`.
-3. Notarize: current path is Xcode Organizer. Build an `.xcarchive` around `dist/Planisphere.app`
-   (see `planisphere-releases/mac-0.9.11-b32-history-2026-10-17/prepare32.py`), Distribute App → Developer ID → Upload,
-   wait for "Ready to distribute", `xcrun stapler staple`, `spctl --assess --type execute`.
-   (No `notarytool --keychain-profile` exists yet; creating one needs Logan's app-specific password.)
+3. Notarize without the GUI (proven 2026-10-17 for 0.9.12): build an `.xcarchive` around `dist/Planisphere.app`
+   (`Products/Applications/Planisphere.app` + an `Info.plist` with `ApplicationProperties`; see
+   `planisphere-releases/mac-0.9.12-b33-host-pin-2026-10-17/`), then
+   `xcodebuild -exportArchive -archivePath <archive> -exportOptionsPlist ExportOptions.plist -exportPath <out> -allowProvisioningUpdates`
+   with `method=developer-id`, `destination=upload`, `teamID=RA46B4WYQ4`, `signingStyle=manual`. It uploads with the Apple ID
+   signed into Xcode; the submitted app appears under `<archive>/Submissions/<id>/`. Poll `xcrun stapler staple` on a copy
+   every ~45 s until the ticket exists (≈3–6 min), then staple the real app, `stapler validate`, `spctl --assess --type execute`.
+   (No `notarytool --keychain-profile` exists; `notarytool history` would need Logan's app-specific password.)
 4. Zip the stapled app (`ditto -c -k --keepParent`), `sign_update --account ooo.planisphere.mac <zip>` for the EdDSA signature.
 5. Website repo `loross14/planisphere-website` (canonical checkout `../planisphere-website`, `main`): add `mac/Planisphere-<ver>-mac.zip`
    + `.sha256`, new `<item>` at the top of `mac/appcast.xml` then `sign_update --account ooo.planisphere.mac mac/appcast.xml`,
